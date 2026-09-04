@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200" role="img" aria-label="Bowl of pasta">
+  <g id="finley-pasta">
+    <path d="M34 96h132c0 42-30 72-66 72S34 138 34 96z" fill="#E9A83F"></path>
+    <ellipse cx="100" cy="96" rx="66" ry="16" fill="#F2BE63"></ellipse>
+    <path d="M62 88c0-10 8-17 18-17s18 7 18 17" stroke="#E9A83F" stroke-width="11" fill="none" stroke-linecap="round"></path>
+    <path d="M104 86c0-10 8-17 18-17s18 7 18 17" stroke="#E9A83F" stroke-width="11" fill="none" stroke-linecap="round"></path>
+    <circle cx="82" cy="122" r="7.5" fill="#1F1F26"></circle>
+    <circle cx="118" cy="122" r="7.5" fill="#1F1F26"></circle>
+    <circle cx="84.5" cy="119.5" r="2.4" fill="#FFFFFF"></circle>
+    <circle cx="120.5" cy="119.5" r="2.4" fill="#FFFFFF"></circle>
+    <path d="M88 136c5 8 19 8 24 0" stroke="#1F1F26" stroke-width="4" fill="none" stroke-linecap="round"></path>
+    <ellipse cx="64" cy="130" rx="8" ry="5.5" fill="#D9736B" opacity=".75"></ellipse>
+    <ellipse cx="136" cy="130" rx="8" ry="5.5" fill="#D9736B" opacity=".75"></ellipse>
+  </g>
+</svg>

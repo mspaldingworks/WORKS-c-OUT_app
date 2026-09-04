@@ -1,0 +1,11 @@
+# Local-only: bakes the API token into the build. Never commit.
+Local.xcconfig
+
+# Xcode
+*.xcodeproj/
+.build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+.DS_Store

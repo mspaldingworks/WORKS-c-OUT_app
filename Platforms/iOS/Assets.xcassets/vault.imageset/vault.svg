@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 160" width="200" height="160" role="img" aria-label="Vault">
+  <g id="vault">
+    <circle cx="118" cy="80" r="62" fill="none" stroke="#8A9099" stroke-width="12"></circle>
+    <circle cx="96" cy="80" r="58" fill="#6E747D"></circle>
+    <circle cx="96" cy="80" r="47" fill="#7D838C"></circle>
+    <g fill="#4F555D">
+      <circle cx="96" cy="30" r="4.5"></circle><circle cx="131" cy="45" r="4.5"></circle>
+      <circle cx="146" cy="80" r="4.5"></circle><circle cx="131" cy="115" r="4.5"></circle>
+      <circle cx="96" cy="130" r="4.5"></circle><circle cx="61" cy="115" r="4.5"></circle>
+      <circle cx="46" cy="80" r="4.5"></circle><circle cx="61" cy="45" r="4.5"></circle>
+    </g>
+    <circle cx="96" cy="80" r="17" fill="#575D65"></circle>
+    <rect x="92" y="46" width="8" height="68" rx="4" fill="#4F555D" transform="rotate(35 96 80)"></rect>
+    <rect x="92" y="46" width="8" height="68" rx="4" fill="#4F555D" transform="rotate(-55 96 80)"></rect>
+  </g>
+</svg>

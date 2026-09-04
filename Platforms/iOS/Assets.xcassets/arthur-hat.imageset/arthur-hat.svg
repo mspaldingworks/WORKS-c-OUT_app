@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120" role="presentation" aria-hidden="true">
+  <g id="arthur-hat">
+    <path d="M60 22L106 78H14z" fill="#D18B4A"></path>
+    <path d="M60 22L84 78H36z" fill="#C47F3E" opacity=".55"></path>
+    <path d="M46 78c0 14 28 14 28 0" stroke="#1F1F26" stroke-width="3" fill="none" stroke-linecap="round"></path>
+  </g>
+</svg>
