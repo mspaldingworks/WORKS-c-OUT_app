@@ -5,10 +5,11 @@ import Security
 
 private let logger = Logger(subsystem: "com.mspaldingworks.WorksCout", category: "JobSearch")
 
-/// Keychain-backed storage for the Job Search API token. There's no login
-/// screen anywhere in Family Appily — this token is provisioned once (by an
-/// adult, in Settings) and then just sits in the Keychain, consistent with
-/// the rest of the app having no accounts.
+/// Keychain-backed storage for the WORKS(c)OUT API token. There's no login
+/// screen — the token is provisioned once and then just sits in the Keychain.
+/// It identifies a real account server-side (every row has an owner), there
+/// is simply only one of them, so a login form would be a wall with nothing
+/// behind it.
 enum WorksCoutKeychain {
     private static let service = "com.mspaldingworks.WorksCout.token"
     private static let tokenAccount = "api-token"
@@ -51,7 +52,10 @@ enum WorksCoutKeychain {
 }
 
 enum WorksCoutConfig {
-    static let baseURL = URL(string: "https://jobs.family-appily.com")!
+    /// WORKS(c)OUT's own domain. The old jobs.family-appily.com pointed at the
+    /// pre-split deployment, which shared a container and database with the
+    /// household app — this one shares nothing with it.
+    static let baseURL = URL(string: "https://api.workscout.agency")!
 
     /// A token baked in at build time via `JOB_SEARCH_API_TOKEN=...` on the
     /// xcodebuild command line, so a fresh install just works instead of asking

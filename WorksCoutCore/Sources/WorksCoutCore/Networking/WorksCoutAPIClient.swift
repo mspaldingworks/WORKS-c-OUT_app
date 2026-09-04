@@ -6,15 +6,19 @@ public enum WorksCoutAPIError: Error, Equatable, Sendable {
     case badStatus(Int)
     /// The server can't do this yet and said why (e.g. no API key configured).
     case unavailable(String)
+    /// The request itself was rejected — a résumé over the size cap, a
+    /// duplicate skill name, a second professional profile — with the reason
+    /// the server gave, so the UI can show it instead of a bare status code.
+    case badRequest(String)
     case decodingFailed
     case transport
 }
 
-/// Talks to the Job Search API (see Famiy_Appily_api's `api/` Django service).
-/// Uses DRF TokenAuthentication — a single long-lived token stored in the
-/// Keychain, not a login flow, consistent with the rest of Family Appily
-/// having no accounts. This is the only part of the app that makes network
-/// calls; everything else (chores, rotation, tickets) is local/CloudKit.
+/// Talks to the WORKS(c)OUT API (see WORKS-c-OUT_api's `api/` Django service).
+/// Uses DRF TokenAuthentication — one long-lived per-account token, not a
+/// login flow. Server-side every row now belongs to a real account, so this
+/// token is what identifies whose data comes back; the app itself still has
+/// no login screen because there is exactly one account.
 public actor WorksCoutAPIClient {
     public struct Configuration: Sendable {
         public var baseURL: URL
@@ -198,6 +202,68 @@ public actor WorksCoutAPIClient {
         try await request("api/identity/resumes/")
     }
 
+    /// Uploads a résumé file. Multipart, not JSON — Django's file parser
+    /// expects multipart/form-data for a FileField, and the server validates
+    /// size/type/count itself regardless of what this client already checked.
+    public func uploadResume(title: String, notes: String = "", fileData: Data,
+                              filename: String, mimeType: String) async throws -> ResumeVersion {
+        let boundary = "WorksCoutBoundary-\(UUID().uuidString)"
+        var body = Data()
+
+        func appendField(_ name: String, _ value: String) {
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n".data(using: .utf8)!)
+            body.append("\(value)\r\n".data(using: .utf8)!)
+        }
+        appendField("title", title)
+        if !notes.isEmpty { appendField("notes", notes) }
+
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append(
+            "Content-Disposition: form-data; name=\"file\"; filename=\"\(filename)\"\r\n"
+                .data(using: .utf8)!
+        )
+        body.append("Content-Type: \(mimeType)\r\n\r\n".data(using: .utf8)!)
+        body.append(fileData)
+        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+
+        var urlRequest = URLRequest(url: configuration.baseURL.appendingPathComponent("api/identity/resumes/"))
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("Token \(configuration.token)", forHTTPHeaderField: "Authorization")
+        urlRequest.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        urlRequest.httpBody = body
+        urlRequest.timeoutInterval = 60
+
+        return try await perform(urlRequest)
+    }
+
+    /// Extract skill/profile suggestions from an uploaded résumé. Cached
+    /// server-side after the first call; pass refresh to redo it. Nothing
+    /// this returns is written anywhere — applying a suggestion is a normal
+    /// createSkill call, same as typing it in by hand.
+    public func parseResume(id: Int, refresh: Bool = false) async throws -> ParsedResumeData {
+        try await request(
+            "api/identity/resumes/\(id)/parse/",
+            method: "POST",
+            queryItems: refresh ? [URLQueryItem(name: "refresh", value: "1")] : [],
+            timeout: 60
+        )
+    }
+
+    public func createSkill(_ new: NewSkill) async throws -> Skill {
+        try await request("api/identity/skills/", method: "POST", body: new)
+    }
+
+    /// Remove a résumé from the list. Not a delete — the row and its parsed
+    /// suggestions survive so `restoreResume` can put them back.
+    public func discardResume(id: Int) async throws -> ResumeVersion {
+        try await request("api/identity/resumes/\(id)/discard/", method: "POST")
+    }
+
+    public func restoreResume(id: Int) async throws -> ResumeVersion {
+        try await request("api/identity/resumes/\(id)/restore/", method: "POST")
+    }
+
     // MARK: Request plumbing
 
     private func request<T: Decodable>(
@@ -227,6 +293,10 @@ public actor WorksCoutAPIClient {
             urlRequest.httpBody = try encoder.encode(body)
         }
 
+        return try await perform(urlRequest)
+    }
+
+    private func perform<T: Decodable>(_ urlRequest: URLRequest) async throws -> T {
         let data: Data
         let response: URLResponse
         do {
@@ -239,10 +309,15 @@ public actor WorksCoutAPIClient {
         switch http.statusCode {
         case 200..<300:
             break
+        case 400:
+            throw WorksCoutAPIError.badRequest(Self.readableValidationMessage(from: data))
         case 401, 403:
             throw WorksCoutAPIError.notAuthenticated
         case 404:
             throw WorksCoutAPIError.notFound
+        case 422:
+            let detail = (try? JSONDecoder().decode([String: String].self, from: data))?["detail"]
+            throw WorksCoutAPIError.badRequest(detail ?? "That file couldn't be read.")
         case 503:
             // Carries an actionable reason ("no API key configured", "no master
             // resume saved") — surfacing it beats a bare status code.
@@ -257,5 +332,17 @@ public actor WorksCoutAPIClient {
         } catch {
             throw WorksCoutAPIError.decodingFailed
         }
+    }
+
+    /// DRF validation errors come back as {"field": ["message", ...]} or
+    /// {"non_field_errors": [...]} — never a single "detail" string like the
+    /// 503/422 cases. Join every message across every field into one readable
+    /// sentence rather than showing raw JSON.
+    private static func readableValidationMessage(from data: Data) -> String {
+        guard let fieldErrors = try? JSONDecoder().decode([String: [String]].self, from: data) else {
+            return "That wasn't accepted."
+        }
+        let messages = fieldErrors.values.flatMap { $0 }
+        return messages.isEmpty ? "That wasn't accepted." : messages.joined(separator: " ")
     }
 }
