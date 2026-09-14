@@ -225,6 +225,33 @@ public actor WorksCoutAPIClient {
         try await request("api/identity/ai-credentials/\(id)/", method: "DELETE")
     }
 
+    // MARK: Google Drive
+
+    /// This account's Drive connection status (never the token itself).
+    public func fetchDriveConnection() async throws -> DriveConnection {
+        try await request("api/identity/drive/")
+    }
+
+    /// The Google consent URL to open (in a web-auth session) to connect Drive.
+    public func driveAuthURL() async throws -> URL {
+        struct Payload: Decodable { let authUrl: String }
+        let payload: Payload = try await request("api/identity/drive/connect/")
+        guard let url = URL(string: payload.authUrl) else { throw WorksCoutAPIError.decodingFailed }
+        return url
+    }
+
+    /// The Identity on/off toggle for saving drafts to Drive.
+    public func setDriveEnabled(_ enabled: Bool) async throws -> DriveConnection {
+        struct Body: Encodable { let enabled: Bool }
+        return try await request("api/identity/drive/", method: "PATCH", body: Body(enabled: enabled))
+    }
+
+    /// Forget the Drive connection. Uploads stop until reconnected.
+    @discardableResult
+    public func disconnectDrive() async throws -> DriveConnection {
+        try await request("api/identity/drive/disconnect/", method: "POST")
+    }
+
     public func fetchProfiles() async throws -> [ProfessionalProfile] {
         try await request("api/identity/profile/")
     }

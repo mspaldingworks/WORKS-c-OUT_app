@@ -28,6 +28,10 @@ struct IdentityView: View {
     @State private var newAIModel = ""
     @State private var newAIBaseURL = ""
     @State private var savingAI = false
+    // The user's own Google Drive: generated drafts/résumés save there when
+    // connected and enabled. The token lives only on the server.
+    @State private var drive = DriveConnection()
+    @State private var driveBusy = false
 
     private static let allowedTypes: [UTType] = [
         .pdf,
@@ -42,6 +46,7 @@ struct IdentityView: View {
                 List {
                     filterSection
                     aiProviderSection
+                    driveSection
                     if !links.isEmpty {
                         Section("Profile links") {
                             ForEach(links) { link in
@@ -156,6 +161,9 @@ struct IdentityView: View {
             }
             if let creds = try? await client.fetchAICredentials() {
                 aiCredentials = creds
+            }
+            if let connection = try? await client.fetchDriveConnection() {
+                drive = connection
             }
             errorMessage = nil
         } catch WorksCoutAPIError.notAuthenticated {
@@ -412,6 +420,108 @@ struct IdentityView: View {
             await loadAICredentials()
         } catch {
             errorMessage = "Couldn't remove \(cred.provider.displayName): \(error)"
+        }
+    }
+
+    // MARK: Google Drive
+
+    /// Connect the user's own Drive so their generated drafts/résumés save there,
+    /// with an on/off toggle. The refresh token stays on the server.
+    private var driveSection: some View {
+        Section {
+            if drive.connected {
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Connected")
+                        if !drive.accountEmail.isEmpty {
+                            Text(drive.accountEmail).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer()
+                    if driveBusy { ProgressView() }
+                }
+                Toggle("Save drafts & résumés to my Google Drive", isOn: driveEnabledBinding)
+                Button(role: .destructive) {
+                    Task { await disconnectDrive() }
+                } label: {
+                    Text("Disconnect Google Drive")
+                }
+                .frame(minHeight: 44)
+                .disabled(driveBusy)
+                .accessibilityLabel("Disconnect Google Drive")
+            } else {
+                Text("Connect Google Drive to have your generated cover letters and résumés saved to your own Drive — ready to attach at an employer's upload dialog.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Button {
+                    Task { await connectDrive() }
+                } label: {
+                    if driveBusy {
+                        ProgressView()
+                    } else {
+                        Label("Connect Google Drive", systemImage: "link")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .frame(minHeight: 44)
+                .disabled(driveBusy)
+            }
+        } header: {
+            Text("Google Drive")
+        } footer: {
+            Text("Uses drive.file access — the app can only see files it creates in your Drive, never anything else.")
+        }
+    }
+
+    private var driveEnabledBinding: Binding<Bool> {
+        Binding(get: { drive.enabled }, set: { newValue in Task { await setDriveEnabled(newValue) } })
+    }
+
+    private func connectDrive() async {
+        driveBusy = true
+        defer { driveBusy = false }
+        do {
+            let url = try await client.driveAuthURL()
+            // The coordinator is retained for the duration of this call (the
+            // session holds its presentation provider weakly).
+            let coordinator = WebAuthCoordinator()
+            guard let callback = try await coordinator.authenticate(url: url, callbackScheme: "workscout") else {
+                return  // user cancelled
+            }
+            let items = URLComponents(url: callback, resolvingAgainstBaseURL: false)?.queryItems
+            if items?.first(where: { $0.name == "ok" })?.value == "1" {
+                drive = (try? await client.fetchDriveConnection()) ?? drive
+                errorMessage = nil
+            } else {
+                errorMessage = items?.first(where: { $0.name == "reason" })?.value
+                    ?? "Google Drive wasn't connected."
+            }
+        } catch WorksCoutAPIError.unavailable(let detail) {
+            errorMessage = detail
+        } catch WorksCoutAPIError.notAuthenticated {
+            onUnauthorized()
+        } catch {
+            errorMessage = "Couldn't connect Google Drive: \(error)"
+        }
+    }
+
+    private func setDriveEnabled(_ enabled: Bool) async {
+        driveBusy = true
+        defer { driveBusy = false }
+        do {
+            drive = try await client.setDriveEnabled(enabled)
+        } catch {
+            errorMessage = "Couldn't update the Drive setting: \(error)"
+        }
+    }
+
+    private func disconnectDrive() async {
+        driveBusy = true
+        defer { driveBusy = false }
+        do {
+            drive = try await client.disconnectDrive()
+        } catch {
+            errorMessage = "Couldn't disconnect Google Drive: \(error)"
         }
     }
 }
