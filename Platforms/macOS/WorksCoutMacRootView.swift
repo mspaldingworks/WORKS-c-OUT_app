@@ -14,7 +14,10 @@ struct WorksCoutMacRootView: View {
         case applied = "Applied"
         case identity = "Identity"
 
-        var id: String { rawValue }
+        // Identify each case by the value itself, not its raw string. The
+        // sidebar List tags rows by `id`, and that tag type must match the
+        // `selection` binding (`Item?`) or clicks never register a selection.
+        var id: Self { self }
         var systemImage: String {
             switch self {
             case .jobFeed: return "tray.and.arrow.down"
