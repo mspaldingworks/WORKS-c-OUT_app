@@ -17,6 +17,9 @@ struct IdentityView: View {
     @State private var addingSkillKey: String?
     @State private var removed: RemovedItem?
     @State private var isUndoing = false
+    // Which Job-Feed filters this account wants surfaced. Edited here so the
+    // feed's filter bar stays legible; saved straight to the server on toggle.
+    @State private var filterPreferences = JobFilterPreferences()
 
     private static let allowedTypes: [UTType] = [
         .pdf,
@@ -29,6 +32,7 @@ struct IdentityView: View {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List {
+                    filterSection
                     if !links.isEmpty {
                         Section("Profile links") {
                             ForEach(links) { link in
@@ -136,6 +140,11 @@ struct IdentityView: View {
             skills = try await skillsTask
             links = try await linksTask
             resumes = try await resumesTask
+            // Best-effort: the filter section falls back to defaults if this
+            // fails, and it must not block the rest of Identity from loading.
+            if let prefs = try? await client.fetchFilterPreferences() {
+                filterPreferences = prefs
+            }
             errorMessage = nil
         } catch WorksCoutAPIError.notAuthenticated {
             onUnauthorized()
@@ -220,6 +229,47 @@ struct IdentityView: View {
             }
         } catch {
             errorMessage = "Couldn't add \(suggestion.name): \(error)"
+        }
+    }
+
+    // MARK: Job filters
+
+    /// Checkboxes choosing which filters appear in the Job Feed, so its filter
+    /// bar shows only what she wants rather than every possible facet at once.
+    private var filterSection: some View {
+        Section {
+            Toggle("Salary range", isOn: filterBinding(\.salary))
+            Toggle("Remote only", isOn: filterBinding(\.remote))
+            Toggle("Job type", isOn: filterBinding(\.jobType))
+            Toggle("Match score", isOn: filterBinding(\.matchScore))
+        } header: {
+            Text("Job filters")
+        } footer: {
+            Text("Choose which filters appear in the Job Feed. Fewer means a simpler filter bar.")
+        }
+    }
+
+    /// Each toggle writes the whole preferences object back to the server. The
+    /// change is optimistic locally; `saveFilterPreferences` reverts on failure.
+    private func filterBinding(_ keyPath: WritableKeyPath<JobFilterPreferences, Bool>) -> Binding<Bool> {
+        Binding(
+            get: { filterPreferences[keyPath: keyPath] },
+            set: { newValue in
+                let previous = filterPreferences
+                filterPreferences[keyPath: keyPath] = newValue
+                Task { await saveFilterPreferences(revertingTo: previous) }
+            }
+        )
+    }
+
+    private func saveFilterPreferences(revertingTo previous: JobFilterPreferences) async {
+        do {
+            filterPreferences = try await client.updateFilterPreferences(filterPreferences)
+        } catch WorksCoutAPIError.notAuthenticated {
+            onUnauthorized()
+        } catch {
+            filterPreferences = previous
+            errorMessage = "Couldn't save filter settings: \(error)"
         }
     }
 }

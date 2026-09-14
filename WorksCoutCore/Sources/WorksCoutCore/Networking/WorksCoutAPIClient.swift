@@ -90,9 +90,13 @@ public actor WorksCoutAPIClient {
     // MARK: Ingestion (RSS job feed)
 
     /// Filtering server-side matters once the scrapers run daily — otherwise the
-    /// feed pulls every posting ever ingested just to show the new ones.
-    public func fetchIngestedPostings(status: IngestedPosting.Status? = nil) async throws -> [IngestedPosting] {
-        let query = status.map { [URLQueryItem(name: "status", value: $0.rawValue)] } ?? []
+    /// feed pulls every posting ever ingested just to show the new ones. The
+    /// optional `filter` adds salary/remote/job-type/score constraints as query
+    /// params (see JobFilterQuery); only the facets the user has enabled populate it.
+    public func fetchIngestedPostings(status: IngestedPosting.Status? = nil,
+                                      filter: JobFilterQuery? = nil) async throws -> [IngestedPosting] {
+        var query = status.map { [URLQueryItem(name: "status", value: $0.rawValue)] } ?? []
+        if let filter { query.append(contentsOf: filter.queryItems) }
         return try await request("api/ingestion/postings/", queryItems: query)
     }
 
@@ -185,6 +189,18 @@ public actor WorksCoutAPIClient {
     }
 
     // MARK: Identity
+
+    /// Which Job-Feed filters this account wants surfaced. GET auto-creates the
+    /// row server-side with defaults, so this always returns something to render.
+    public func fetchFilterPreferences() async throws -> JobFilterPreferences {
+        try await request("api/identity/filter-preferences/")
+    }
+
+    /// Toggle which filters appear in the Job Feed. Singleton per account, so
+    /// there's no id — PATCH always updates "mine".
+    public func updateFilterPreferences(_ preferences: JobFilterPreferences) async throws -> JobFilterPreferences {
+        try await request("api/identity/filter-preferences/", method: "PATCH", body: preferences)
+    }
 
     public func fetchProfiles() async throws -> [ProfessionalProfile] {
         try await request("api/identity/profile/")

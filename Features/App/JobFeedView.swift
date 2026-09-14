@@ -22,30 +22,22 @@ struct JobFeedView: View {
     @State private var removed: RemovedItem?
     @State private var isUndoing = false
 
+    // Which filters the user has chosen to surface (Identity → Job filters), and
+    // the active selections applied to the feed request. Only enabled facets
+    // appear in the bar; the salary brackets are checkboxes that collapse to a
+    // single min/max range sent to the server.
+    @State private var preferences = JobFilterPreferences()
+    @State private var filter = JobFilterQuery()
+    @State private var selectedBrackets: Set<String> = []
+    @State private var includeUnspecifiedSalary = true
+
     var body: some View {
-        Group {
-            if isLoading && postings.isEmpty {
-                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if postings.isEmpty {
-                ContentUnavailableView(
-                    "No postings yet",
-                    systemImage: "tray",
-                    description: Text("Scraped postings will show up here, best match first.")
-                )
-            } else {
-                List(postings) { posting in
-                    PostingRow(
-                        posting: posting,
-                        isApplying: applyingID == posting.id,
-                        isExpanded: expanded.contains(posting.id),
-                        onToggleDetails: { toggleDetails(posting) },
-                        onApply: { Task { await applyTo(posting) } },
-                        onSignIn: { openSignIn(posting) },
-                        onRemove: { Task { await remove(posting) } }
-                    )
-                }
-                .listStyle(.inset)
+        VStack(spacing: 0) {
+            if !preferences.isNoneEnabled {
+                filterBar
+                Divider()
             }
+            content
         }
         .safeAreaInset(edge: .bottom) {
             if let removed {
@@ -67,7 +59,38 @@ struct JobFeedView: View {
             }
         }
         .task { await load() }
-        .refreshable { await load() }
+        .onChange(of: filter) { Task { await loadPostings() } }
+        .onChange(of: selectedBrackets) { recomputeSalary() }
+        .onChange(of: includeUnspecifiedSalary) { recomputeSalary() }
+        .refreshable { await loadPostings() }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if isLoading && postings.isEmpty {
+            ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if postings.isEmpty {
+            ContentUnavailableView(
+                filtersActive ? "No jobs match these filters" : "No postings yet",
+                systemImage: filtersActive ? "line.3.horizontal.decrease.circle" : "tray",
+                description: Text(filtersActive
+                    ? "Try widening or clearing the filters above."
+                    : "Scraped postings will show up here, best match first.")
+            )
+        } else {
+            List(postings) { posting in
+                PostingRow(
+                    posting: posting,
+                    isApplying: applyingID == posting.id,
+                    isExpanded: expanded.contains(posting.id),
+                    onToggleDetails: { toggleDetails(posting) },
+                    onApply: { Task { await applyTo(posting) } },
+                    onSignIn: { openSignIn(posting) },
+                    onRemove: { Task { await remove(posting) } }
+                )
+            }
+            .listStyle(.inset)
+        }
     }
 
     private func remove(_ posting: IngestedPosting) async {
@@ -100,17 +123,49 @@ struct JobFeedView: View {
         }
     }
 
+    private var filtersActive: Bool { !filter.isEmpty }
+
     private func load() async {
+        await loadPreferences()
+        await loadPostings()
+    }
+
+    /// Which filters to surface is the user's choice (Identity → Job filters). A
+    /// failure here just leaves the defaults; the feed still works without a bar.
+    private func loadPreferences() async {
+        if let prefs = try? await client.fetchFilterPreferences() {
+            preferences = prefs
+        }
+    }
+
+    private func loadPostings() async {
         isLoading = true
         defer { isLoading = false }
         do {
-            postings = try await client.fetchIngestedPostings(status: .new)
+            postings = try await client.fetchIngestedPostings(status: .new, filter: filter)
             errorMessage = nil
         } catch WorksCoutAPIError.notAuthenticated {
             onUnauthorized()
         } catch {
             errorMessage = "Couldn't load the job feed: \(error)"
         }
+    }
+
+    /// Collapse the ticked salary brackets into one min/max range for the server.
+    /// A nil floor/ceiling in the selection means open-ended on that side
+    /// ("Under $30k" has no floor, "$100k+" no ceiling).
+    private func recomputeSalary() {
+        let chosen = Self.salaryBrackets.filter { selectedBrackets.contains($0.id) }
+        if chosen.isEmpty {
+            filter.salaryMin = nil
+            filter.salaryMax = nil
+        } else {
+            let mins = chosen.map(\.min)
+            let maxes = chosen.map(\.max)
+            filter.salaryMin = mins.contains(nil) ? nil : mins.compactMap { $0 }.min()
+            filter.salaryMax = maxes.contains(nil) ? nil : maxes.compactMap { $0 }.max()
+        }
+        filter.includeUnspecifiedSalary = includeUnspecifiedSalary
     }
 
     /// One tap does the whole thing: write the materials if they're missing,
@@ -150,6 +205,167 @@ struct JobFeedView: View {
         #else
         NSWorkspace.shared.open(url)
         #endif
+    }
+
+    // MARK: Filter bar
+
+    fileprivate struct SalaryBracket: Identifiable {
+        let id: String
+        let label: String
+        let min: Int?
+        let max: Int?
+    }
+
+    fileprivate struct JobTypeOption: Identifiable {
+        let token: String
+        let label: String
+        var id: String { token }
+    }
+
+    fileprivate struct ScoreOption: Identifiable {
+        let value: Int?
+        let label: String
+        var id: String { label }
+    }
+
+    fileprivate static let salaryBrackets: [SalaryBracket] = [
+        .init(id: "u30", label: "Under $30k", min: nil, max: 30_000),
+        .init(id: "30-50", label: "$30k – $50k", min: 30_000, max: 50_000),
+        .init(id: "50-75", label: "$50k – $75k", min: 50_000, max: 75_000),
+        .init(id: "75-100", label: "$75k – $100k", min: 75_000, max: 100_000),
+        .init(id: "100", label: "$100k+", min: 100_000, max: nil),
+    ]
+
+    private static let jobTypeOptions: [JobTypeOption] = [
+        .init(token: "full_time", label: "Full-time"),
+        .init(token: "part_time", label: "Part-time"),
+        .init(token: "contract", label: "Contract"),
+        .init(token: "temporary", label: "Temporary"),
+        .init(token: "internship", label: "Internship"),
+    ]
+
+    private static let scoreOptions: [ScoreOption] = [
+        .init(value: nil, label: "Any match"),
+        .init(value: 55, label: "55+"),
+        .init(value: 70, label: "70+"),
+        .init(value: 80, label: "80+"),
+    ]
+
+    private var filterBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                if preferences.salary { salaryMenu }
+                if preferences.remote { remoteChip }
+                if preferences.jobType { jobTypeMenu }
+                if preferences.matchScore { scoreMenu }
+                if filtersActive { clearButton }
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+        }
+    }
+
+    private var salaryMenu: some View {
+        Menu {
+            ForEach(Self.salaryBrackets) { bracket in
+                Toggle(bracket.label, isOn: bracketBinding(bracket.id))
+            }
+            Divider()
+            Toggle("Include jobs with no listed pay", isOn: $includeUnspecifiedSalary)
+        } label: {
+            chipLabel(selectedBrackets.isEmpty ? "Salary" : "Salary (\(selectedBrackets.count))",
+                      systemImage: "dollarsign.circle", active: !selectedBrackets.isEmpty)
+        }
+        .accessibilityLabel("Filter by salary range")
+    }
+
+    private func bracketBinding(_ id: String) -> Binding<Bool> {
+        Binding(
+            get: { selectedBrackets.contains(id) },
+            set: { isOn in
+                if isOn { selectedBrackets.insert(id) } else { selectedBrackets.remove(id) }
+            }
+        )
+    }
+
+    private var remoteChip: some View {
+        Button {
+            filter.remoteOnly.toggle()
+        } label: {
+            chipLabel("Remote", systemImage: "house", active: filter.remoteOnly)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(filter.remoteOnly
+            ? "Showing remote jobs only. Activate to include all locations."
+            : "Show remote jobs only")
+    }
+
+    private var jobTypeMenu: some View {
+        Menu {
+            ForEach(Self.jobTypeOptions) { option in
+                Toggle(option.label, isOn: jobTypeBinding(option.token))
+            }
+        } label: {
+            chipLabel(filter.jobTypes.isEmpty ? "Job type" : "Job type (\(filter.jobTypes.count))",
+                      systemImage: "briefcase", active: !filter.jobTypes.isEmpty)
+        }
+        .accessibilityLabel("Filter by job type")
+    }
+
+    private func jobTypeBinding(_ token: String) -> Binding<Bool> {
+        Binding(
+            get: { filter.jobTypes.contains(token) },
+            set: { isOn in
+                if isOn {
+                    if !filter.jobTypes.contains(token) { filter.jobTypes.append(token) }
+                } else {
+                    filter.jobTypes.removeAll { $0 == token }
+                }
+            }
+        )
+    }
+
+    private var scoreMenu: some View {
+        Menu {
+            ForEach(Self.scoreOptions) { option in
+                Button {
+                    filter.minScore = option.value
+                } label: {
+                    if filter.minScore == option.value {
+                        Label(option.label, systemImage: "checkmark")
+                    } else {
+                        Text(option.label)
+                    }
+                }
+            }
+        } label: {
+            chipLabel(filter.minScore.map { "Match \($0)+" } ?? "Match",
+                      systemImage: "rosette", active: filter.minScore != nil)
+        }
+        .accessibilityLabel("Filter by minimum match score")
+    }
+
+    private var clearButton: some View {
+        Button {
+            selectedBrackets.removeAll()
+            includeUnspecifiedSalary = true
+            filter = JobFilterQuery()
+        } label: {
+            chipLabel("Clear", systemImage: "xmark.circle", active: false)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Clear all filters")
+    }
+
+    private func chipLabel(_ title: String, systemImage: String, active: Bool) -> some View {
+        Label(title, systemImage: systemImage)
+            .font(.subheadline.weight(.medium))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(active ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.12),
+                        in: Capsule())
+            .foregroundStyle(active ? Color.accentColor : Color.primary)
+            .frame(minHeight: 44)
     }
 }
 
