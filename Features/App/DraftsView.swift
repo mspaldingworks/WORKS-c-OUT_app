@@ -20,6 +20,7 @@ struct DraftsView: View {
     @State private var companies: [Company] = []
     @State private var removed: RemovedItem?
     @State private var isUndoing = false
+    @State private var gapsToReview: GapList?
 
     private var drafts: [Application] { applications.filter(\.isDraft) }
 
@@ -39,6 +40,14 @@ struct DraftsView: View {
                         application: application,
                         isApproving: approvingID == application.id,
                         onRead: { reviewing = application },
+                        onShowGaps: {
+                            gapsToReview = GapList(
+                                id: application.id,
+                                roleTitle: application.roleTitle,
+                                companyName: application.companyName,
+                                gaps: application.generatedMaterials?.gaps ?? []
+                            )
+                        },
                         onApprove: { Task { await approve(application) } },
                         onRemove: { Task { await remove(application) } }
                     )
@@ -89,6 +98,9 @@ struct DraftsView: View {
                     applications[index] = updated
                 }
             }
+        }
+        .sheet(item: $gapsToReview) { item in
+            GapsReviewView(roleTitle: item.roleTitle, companyName: item.companyName, gaps: item.gaps)
         }
     }
 
@@ -151,6 +163,7 @@ private struct DraftRow: View {
     let application: Application
     let isApproving: Bool
     let onRead: () -> Void
+    let onShowGaps: () -> Void
     let onApprove: () -> Void
     let onRemove: () -> Void
 
@@ -170,10 +183,19 @@ private struct DraftRow: View {
             }
 
             if let materials = application.generatedMaterials, !materials.gaps.isEmpty {
-                Label("\(materials.gaps.count) gaps to prepare for",
-                      systemImage: "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Button(action: onShowGaps) {
+                    HStack(spacing: 6) {
+                        Label("\(materials.gaps.count) \(materials.gaps.count == 1 ? "gap" : "gaps") to review",
+                              systemImage: "exclamationmark.triangle.fill")
+                        Image(systemName: "chevron.right").font(.caption2)
+                    }
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.orange)
+                }
+                .buttonStyle(.plain)
+                .frame(minHeight: 44, alignment: .leading)
+                .accessibilityLabel("Review \(materials.gaps.count) gaps for \(application.roleTitle)")
+                .accessibilityHint("Lists the gaps to prepare for")
             }
 
             actions
@@ -253,5 +275,67 @@ struct StatusChip: View {
             .foregroundStyle(tint)
             .labelStyle(.titleAndIcon)
             .accessibilityLabel("Status: \(status.label)")
+    }
+}
+
+/// One draft's gaps, as a sheet item.
+private struct GapList: Identifiable {
+    let id: Int
+    let roleTitle: String
+    let companyName: String
+    let gaps: [String]
+}
+
+/// The gaps for one draft, listed on their own for a quick read — the same
+/// interview-prep notes shown inside the full review, reachable in one tap from
+/// the list without opening the whole draft.
+private struct GapsReviewView: View {
+    @Environment(\.dismiss) private var dismiss
+    let roleTitle: String
+    let companyName: String
+    let gaps: [String]
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if gaps.isEmpty {
+                    ContentUnavailableView("No gaps flagged", systemImage: "checkmark.seal",
+                                           description: Text("Nothing stood out as a gap for this one."))
+                } else {
+                    List {
+                        Section {
+                            ForEach(Array(gaps.enumerated()), id: \.offset) { _, gap in
+                                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundStyle(.orange)
+                                        .accessibilityHidden(true)
+                                    Text(gap)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .textSelection(.enabled)
+                                }
+                                .padding(.vertical, 2)
+                            }
+                        } header: {
+                            Text("\(roleTitle) · \(companyName)")
+                        } footer: {
+                            Text("Only you see these — they're interview prep, not part of the application.")
+                        }
+                    }
+                    .listStyle(.inset)
+                }
+            }
+            .navigationTitle("Gaps to review")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        #if os(macOS)
+        .frame(minWidth: 440, minHeight: 340)
+        #endif
     }
 }
