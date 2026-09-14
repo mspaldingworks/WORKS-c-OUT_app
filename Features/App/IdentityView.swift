@@ -20,6 +20,14 @@ struct IdentityView: View {
     // Which Job-Feed filters this account wants surfaced. Edited here so the
     // feed's filter bar stays legible; saved straight to the server on toggle.
     @State private var filterPreferences = JobFilterPreferences()
+    // The user's own AI provider keys (masked). Adding one routes their
+    // generation/parsing through their subscription instead of the server's.
+    @State private var aiCredentials: [AICredential] = []
+    @State private var newAIProvider: AIProvider = .anthropic
+    @State private var newAIKey = ""
+    @State private var newAIModel = ""
+    @State private var newAIBaseURL = ""
+    @State private var savingAI = false
 
     private static let allowedTypes: [UTType] = [
         .pdf,
@@ -33,6 +41,7 @@ struct IdentityView: View {
             } else {
                 List {
                     filterSection
+                    aiProviderSection
                     if !links.isEmpty {
                         Section("Profile links") {
                             ForEach(links) { link in
@@ -144,6 +153,9 @@ struct IdentityView: View {
             // fails, and it must not block the rest of Identity from loading.
             if let prefs = try? await client.fetchFilterPreferences() {
                 filterPreferences = prefs
+            }
+            if let creds = try? await client.fetchAICredentials() {
+                aiCredentials = creds
             }
             errorMessage = nil
         } catch WorksCoutAPIError.notAuthenticated {
@@ -270,6 +282,136 @@ struct IdentityView: View {
         } catch {
             filterPreferences = previous
             errorMessage = "Couldn't save filter settings: \(error)"
+        }
+    }
+
+    // MARK: AI provider
+
+    /// Bring-your-own-key: pick a provider, paste its API key, and generation +
+    /// résumé parsing run on that instead of the server's default.
+    private var aiProviderSection: some View {
+        Section {
+            ForEach(aiCredentials) { cred in
+                aiCredentialRow(cred)
+            }
+            Picker("Provider", selection: $newAIProvider) {
+                ForEach(AIProvider.allCases) { provider in
+                    Text(provider.displayName).tag(provider)
+                }
+            }
+            SecureField("API key", text: $newAIKey)
+            TextField(newAIProvider.modelPlaceholder, text: $newAIModel)
+                .autocorrectionDisabled()
+            if newAIProvider.needsBaseURL {
+                TextField("Base URL (https://…)", text: $newAIBaseURL)
+                    .autocorrectionDisabled()
+            }
+            Button {
+                Task { await saveAICredential() }
+            } label: {
+                if savingAI {
+                    ProgressView()
+                } else {
+                    Text("Save & use \(newAIProvider.displayName)")
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .frame(minHeight: 44)
+            .disabled(saveAIDisabled)
+            if let url = newAIProvider.keyURL {
+                Link("Get an API key for \(newAIProvider.displayName)", destination: url)
+                    .font(.footnote)
+            }
+        } header: {
+            Text("AI provider")
+        } footer: {
+            Text("Bring your own AI by pasting an API key — not a subscription — from the provider's developer console. It's stored encrypted and used to write your materials. Leave it unset to use the built-in default.")
+        }
+    }
+
+    private var saveAIDisabled: Bool {
+        savingAI
+            || newAIKey.trimmingCharacters(in: .whitespaces).isEmpty
+            || (newAIProvider.needsBaseURL && newAIBaseURL.trimmingCharacters(in: .whitespaces).isEmpty)
+    }
+
+    @ViewBuilder
+    private func aiCredentialRow(_ cred: AICredential) -> some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(cred.provider.displayName)
+                Text("\(cred.model.isEmpty ? cred.provider.modelPlaceholder : cred.model) · key \(cred.maskedKey)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if cred.isActive {
+                Label("In use", systemImage: "checkmark.circle.fill")
+                    .labelStyle(.iconOnly)
+                    .foregroundStyle(.green)
+                    .accessibilityLabel("\(cred.provider.displayName) is in use")
+            } else {
+                Button("Use") { Task { await activateAICredential(cred) } }
+                    .buttonStyle(.bordered)
+                    .frame(minHeight: 44)
+                    .accessibilityLabel("Use \(cred.provider.displayName)")
+            }
+            Button(role: .destructive) {
+                Task { await removeAICredential(cred) }
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+            .frame(minWidth: 44, minHeight: 44)
+            .accessibilityLabel("Remove the \(cred.provider.displayName) key")
+        }
+    }
+
+    private func loadAICredentials() async {
+        if let creds = try? await client.fetchAICredentials() {
+            aiCredentials = creds
+        }
+    }
+
+    private func saveAICredential() async {
+        savingAI = true
+        defer { savingAI = false }
+        do {
+            _ = try await client.saveAICredential(
+                NewAICredential(
+                    provider: newAIProvider,
+                    apiKey: newAIKey.trimmingCharacters(in: .whitespacesAndNewlines),
+                    model: newAIModel.trimmingCharacters(in: .whitespacesAndNewlines),
+                    baseUrl: newAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+                )
+            )
+            newAIKey = ""; newAIModel = ""; newAIBaseURL = ""
+            await loadAICredentials()
+            errorMessage = nil
+        } catch WorksCoutAPIError.notAuthenticated {
+            onUnauthorized()
+        } catch WorksCoutAPIError.badRequest(let detail) {
+            errorMessage = detail
+        } catch {
+            errorMessage = "Couldn't save the AI key: \(error)"
+        }
+    }
+
+    private func activateAICredential(_ cred: AICredential) async {
+        do {
+            _ = try await client.activateAICredential(id: cred.id)
+            await loadAICredentials()
+        } catch {
+            errorMessage = "Couldn't switch to \(cred.provider.displayName): \(error)"
+        }
+    }
+
+    private func removeAICredential(_ cred: AICredential) async {
+        do {
+            try await client.deleteAICredential(id: cred.id)
+            await loadAICredentials()
+        } catch {
+            errorMessage = "Couldn't remove \(cred.provider.displayName): \(error)"
         }
     }
 }

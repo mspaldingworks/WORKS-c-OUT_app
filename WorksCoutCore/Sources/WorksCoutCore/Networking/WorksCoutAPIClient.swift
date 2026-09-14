@@ -202,6 +202,29 @@ public actor WorksCoutAPIClient {
         try await request("api/identity/filter-preferences/", method: "PATCH", body: preferences)
     }
 
+    /// The account's own AI provider keys. Keys come back masked — the plaintext
+    /// is never returned by the server.
+    public func fetchAICredentials() async throws -> [AICredential] {
+        try await request("api/identity/ai-credentials/")
+    }
+
+    /// Save (or replace) the key for a provider and make it the active one.
+    public func saveAICredential(_ credential: NewAICredential) async throws -> AICredential {
+        try await request("api/identity/ai-credentials/", method: "POST", body: credential)
+    }
+
+    /// Switch which saved provider is actually used.
+    public func activateAICredential(id: Int) async throws -> AICredential {
+        try await request("api/identity/ai-credentials/\(id)/activate/", method: "POST")
+    }
+
+    /// Remove a saved provider key. The server returns the deleted row (200), not
+    /// an empty 204, so there's always a body to decode.
+    @discardableResult
+    public func deleteAICredential(id: Int) async throws -> AICredential {
+        try await request("api/identity/ai-credentials/\(id)/", method: "DELETE")
+    }
+
     public func fetchProfiles() async throws -> [ProfessionalProfile] {
         try await request("api/identity/profile/")
     }
