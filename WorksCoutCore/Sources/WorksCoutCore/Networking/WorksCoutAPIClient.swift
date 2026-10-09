@@ -91,7 +91,7 @@ public actor WorksCoutAPIClient {
 
     /// Filtering server-side matters once the scrapers run daily — otherwise the
     /// feed pulls every posting ever ingested just to show the new ones. The
-    /// optional `filter` adds salary/remote/job-type/score constraints as query
+    /// optional `filter` adds salary/workplace/distance/date/search/sort query
     /// params (see JobFilterQuery); only the facets the user has enabled populate it.
     public func fetchIngestedPostings(status: IngestedPosting.Status? = nil,
                                       filter: JobFilterQuery? = nil) async throws -> [IngestedPosting] {
@@ -200,6 +200,14 @@ public actor WorksCoutAPIClient {
     /// there's no id — PATCH always updates "mine".
     public func updateFilterPreferences(_ preferences: JobFilterPreferences) async throws -> JobFilterPreferences {
         try await request("api/identity/filter-preferences/", method: "PATCH", body: preferences)
+    }
+
+    /// Remember the Job Feed's sort order. Sends only that field, so the feed
+    /// can save it without overwriting settings changed on another screen.
+    @discardableResult
+    public func updateFilterSort(_ sort: JobSort) async throws -> JobFilterPreferences {
+        try await request("api/identity/filter-preferences/", method: "PATCH",
+                          body: ["sort": sort.rawValue])
     }
 
     /// The account's own AI provider keys. Keys come back masked — the plaintext

@@ -1,4 +1,5 @@
 import WorksCoutCore
+import CoreLocation
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -20,6 +21,9 @@ struct IdentityView: View {
     // Which Job-Feed filters this account wants surfaced. Edited here so the
     // feed's filter bar stays legible; saved straight to the server on toggle.
     @State private var filterPreferences = JobFilterPreferences()
+    // The home-location field: what she's typed, and whether it's being looked up.
+    @State private var homeQuery = ""
+    @State private var isLocatingHome = false
     // The user's own AI provider keys (masked). Adding one routes their
     // generation/parsing through their subscription instead of the server's.
     @State private var aiCredentials: [AICredential] = []
@@ -255,18 +259,113 @@ struct IdentityView: View {
     // MARK: Job filters
 
     /// Checkboxes choosing which filters appear in the Job Feed, so its filter
-    /// bar shows only what she wants rather than every possible facet at once.
+    /// bar shows only what she wants rather than every possible facet at once —
+    /// plus the home location the distance filter and "Closest" sort measure from.
     private var filterSection: some View {
         Section {
+            Toggle("Workplace (remote, hybrid, on-site)", isOn: filterBinding(\.remote))
+            Toggle("Distance from home", isOn: filterBinding(\.distance))
+            Toggle("Date posted", isOn: filterBinding(\.postedDate))
             Toggle("Salary range", isOn: filterBinding(\.salary))
-            Toggle("Remote only", isOn: filterBinding(\.remote))
             Toggle("Job type", isOn: filterBinding(\.jobType))
             Toggle("Match score", isOn: filterBinding(\.matchScore))
+            Toggle("No account needed", isOn: filterBinding(\.easyApply))
+            homeLocationRow
+            if filterPreferences.hasHome {
+                Stepper(value: radiusBinding, in: 5...200, step: 5) {
+                    Text("Default radius: \(filterPreferences.radiusMiles) mi")
+                }
+            }
         } header: {
             Text("Job filters")
         } footer: {
-            Text("Choose which filters appear in the Job Feed. Fewer means a simpler filter bar.")
+            Text("Choose which filters appear in the Job Feed. Fewer means a simpler filter bar. Distances are straight-line miles from your home location, which is looked up on this device and saved only as a point on the map.")
         }
+    }
+
+    @ViewBuilder
+    private var homeLocationRow: some View {
+        if filterPreferences.hasHome {
+            HStack {
+                Label(filterPreferences.homeLabel.isEmpty ? "Home location set" : filterPreferences.homeLabel,
+                      systemImage: "house.fill")
+                Spacer()
+                Button("Change") {
+                    homeQuery = filterPreferences.homeLabel
+                    Task { await setHome(nil) }
+                }
+                .buttonStyle(.borderless)
+            }
+            .accessibilityElement(children: .combine)
+        } else {
+            HStack {
+                TextField("Home city or ZIP code", text: $homeQuery)
+                    .onSubmit { Task { await lookUpHome() } }
+                if isLocatingHome {
+                    ProgressView()
+                } else {
+                    Button("Set") { Task { await lookUpHome() } }
+                        .buttonStyle(.borderless)
+                        .disabled(homeQuery.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+        }
+    }
+
+    private var radiusBinding: Binding<Int> {
+        Binding(
+            get: { filterPreferences.radiusMiles },
+            set: { newValue in
+                let previous = filterPreferences
+                filterPreferences.radiusMiles = newValue
+                Task { await saveFilterPreferences(revertingTo: previous) }
+            }
+        )
+    }
+
+    /// Turns what she typed into coordinates with the system geocoder, so the
+    /// server never has to send her address to a third party.
+    private func lookUpHome() async {
+        let query = homeQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return }
+        isLocatingHome = true
+        defer { isLocatingHome = false }
+        do {
+            let placemarks = try await CLGeocoder().geocodeAddressString(query)
+            guard let placemark = placemarks.first, let location = placemark.location else {
+                errorMessage = "Couldn't find \(query). Try a city and state, or a ZIP code."
+                return
+            }
+            await setHome(HomeLocation(label: Self.label(for: placemark, typed: query),
+                                       coordinate: location.coordinate))
+        } catch {
+            errorMessage = "Couldn't find \(query). Try a city and state, or a ZIP code."
+        }
+    }
+
+    private struct HomeLocation {
+        let label: String
+        let coordinate: CLLocationCoordinate2D
+    }
+
+    /// Saves (or, with nil, clears) the home location.
+    private func setHome(_ home: HomeLocation?) async {
+        let previous = filterPreferences
+        filterPreferences.homeLabel = home?.label ?? ""
+        filterPreferences.homeLatitude = home?.coordinate.latitude
+        filterPreferences.homeLongitude = home?.coordinate.longitude
+        await saveFilterPreferences(revertingTo: previous)
+        if home != nil { homeQuery = "" }
+    }
+
+    /// "Louisville, KY 40205" rather than whatever was typed, so she can see
+    /// the geocoder understood her.
+    private static func label(for placemark: CLPlacemark, typed: String) -> String {
+        let cityState = [placemark.locality, placemark.administrativeArea]
+            .compactMap { $0 }
+            .joined(separator: ", ")
+        let parts = [cityState, placemark.postalCode ?? ""].filter { !$0.isEmpty }
+        return parts.isEmpty ? typed : parts.joined(separator: " ")
     }
 
     /// Each toggle writes the whole preferences object back to the server. The
