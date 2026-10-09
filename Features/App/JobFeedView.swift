@@ -30,15 +30,19 @@ struct JobFeedView: View {
     @State private var filter = JobFilterQuery()
     @State private var selectedBrackets: Set<String> = []
     @State private var includeUnspecifiedSalary = true
+    // What's typed in the search field; copied into `filter.search` after a
+    // short pause so each keystroke isn't a request.
+    @State private var searchText = ""
+    // The saved sort is applied once per appearance, not on every reload.
+    @State private var appliedSavedSort = false
 
     var body: some View {
         VStack(spacing: 0) {
-            if !preferences.isNoneEnabled {
-                filterBar
-                Divider()
-            }
+            filterBar
+            Divider()
             content
         }
+        .searchable(text: $searchText, prompt: "Search titles, companies, descriptions")
         .safeAreaInset(edge: .bottom) {
             if let removed {
                 UndoBanner(
@@ -59,7 +63,20 @@ struct JobFeedView: View {
             }
         }
         .task { await load() }
+        .task(id: searchText) {
+            // Debounce: a new keystroke cancels this task before it lands.
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled, filter.search != searchText else { return }
+            filter.search = searchText
+        }
         .onChange(of: filter) { Task { await loadPostings() } }
+        .onChange(of: filter.sort) { _, sort in
+            if sort == .closest && !preferences.hasHome {
+                filter.sort = .best
+            } else {
+                Task { await rememberSort(sort) }
+            }
+        }
         .onChange(of: selectedBrackets) { recomputeSalary() }
         .onChange(of: includeUnspecifiedSalary) { recomputeSalary() }
         .refreshable { await loadPostings() }
@@ -74,7 +91,7 @@ struct JobFeedView: View {
                 filtersActive ? "No jobs match these filters" : "No postings yet",
                 systemImage: filtersActive ? "line.3.horizontal.decrease.circle" : "tray",
                 description: Text(filtersActive
-                    ? "Try widening or clearing the filters above."
+                    ? "Try widening or clearing the filters or search above."
                     : "Scraped postings will show up here, best match first.")
             )
         } else {
@@ -127,7 +144,25 @@ struct JobFeedView: View {
 
     private func load() async {
         await loadPreferences()
+        if !appliedSavedSort {
+            appliedSavedSort = true
+            // Closest needs a home; without one the server would quietly fall
+            // back to best match while the menu still said "Closest".
+            let saved = preferences.sort == .closest && !preferences.hasHome ? .best : preferences.sort
+            if filter.sort != saved {
+                filter.sort = saved  // onChange(of: filter) does the load
+                return
+            }
+        }
         await loadPostings()
+    }
+
+    /// The sort is remembered across launches. Only the one field is sent, so
+    /// this can't overwrite filter settings changed on the Identity screen.
+    private func rememberSort(_ sort: JobSort) async {
+        guard preferences.sort != sort else { return }
+        preferences.sort = sort
+        _ = try? await client.updateFilterSort(sort)
     }
 
     /// Which filters to surface is the user's choice (Identity → Job filters). A
@@ -228,6 +263,12 @@ struct JobFeedView: View {
         var id: String { label }
     }
 
+    fileprivate struct DayOption: Identifiable {
+        let days: Int?
+        let label: String
+        var id: String { label }
+    }
+
     fileprivate static let salaryBrackets: [SalaryBracket] = [
         .init(id: "u30", label: "Under $30k", min: nil, max: 30_000),
         .init(id: "30-50", label: "$30k – $50k", min: 30_000, max: 50_000),
@@ -251,18 +292,157 @@ struct JobFeedView: View {
         .init(value: 80, label: "80+"),
     ]
 
+    private static let radiusOptions = [5, 10, 25, 50, 100]
+
+    private static let postedOptions: [DayOption] = [
+        .init(days: nil, label: "Any time"),
+        .init(days: 1, label: "Past 24 hours"),
+        .init(days: 3, label: "Past 3 days"),
+        .init(days: 7, label: "Past week"),
+        .init(days: 14, label: "Past 2 weeks"),
+        .init(days: 30, label: "Past month"),
+    ]
+
+    /// Sort leads and is always there; the filters after it are whichever ones
+    /// she has switched on in Identity → Job filters.
     private var filterBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
+                sortMenu
+                if preferences.remote { workplaceMenu }
+                if preferences.distance { distanceMenu }
+                if preferences.postedDate { postedMenu }
                 if preferences.salary { salaryMenu }
-                if preferences.remote { remoteChip }
                 if preferences.jobType { jobTypeMenu }
                 if preferences.matchScore { scoreMenu }
+                if preferences.easyApply { noAccountChip }
                 if filtersActive { clearButton }
             }
             .padding(.horizontal)
             .padding(.vertical, 8)
         }
+    }
+
+    private var sortMenu: some View {
+        Menu {
+            Picker("Sort by", selection: $filter.sort) {
+                ForEach(JobSort.allCases) { sort in
+                    Label(sort.label, systemImage: sort.systemImage)
+                        .tag(sort)
+                        .selectionDisabled(sort == .closest && !preferences.hasHome)
+                }
+            }
+            .pickerStyle(.inline)
+            if !preferences.hasHome {
+                Text("Set a home location in Identity → Job filters to sort by distance.")
+            }
+        } label: {
+            chipLabel(filter.sort.label, systemImage: "arrow.up.arrow.down",
+                      active: filter.sort != .best)
+        }
+        .accessibilityLabel("Sort by \(filter.sort.label)")
+        .accessibilityHint("Changes the order of the job feed")
+    }
+
+    private var workplaceMenu: some View {
+        Menu {
+            ForEach(Workplace.allCases) { workplace in
+                Toggle(isOn: workplaceBinding(workplace)) {
+                    Label(workplace.label, systemImage: workplace.systemImage)
+                }
+            }
+        } label: {
+            chipLabel(workplaceTitle, systemImage: "house", active: !filter.workplaces.isEmpty)
+        }
+        .accessibilityLabel("Filter by workplace: \(workplaceTitle)")
+    }
+
+    private var workplaceTitle: String {
+        switch filter.workplaces.count {
+        case 0: return "Workplace"
+        case 1: return filter.workplaces[0].label
+        default: return filter.workplaces.map(\.label).joined(separator: " + ")
+        }
+    }
+
+    private func workplaceBinding(_ workplace: Workplace) -> Binding<Bool> {
+        Binding(
+            get: { filter.workplaces.contains(workplace) },
+            set: { isOn in
+                if isOn {
+                    if !filter.workplaces.contains(workplace) { filter.workplaces.append(workplace) }
+                    // Keep the order stable whatever order they were ticked in.
+                    filter.workplaces.sort { lhs, rhs in
+                        Workplace.allCases.firstIndex(of: lhs)! < Workplace.allCases.firstIndex(of: rhs)!
+                    }
+                } else {
+                    filter.workplaces.removeAll { $0 == workplace }
+                }
+            }
+        )
+    }
+
+    /// Straight-line miles from the home saved in Identity. Without a home there
+    /// is nothing to measure from, so the menu says where to set one instead.
+    private var distanceMenu: some View {
+        Menu {
+            if preferences.hasHome {
+                Section("From \(preferences.homeLabel.isEmpty ? "home" : preferences.homeLabel)") {
+                    Button {
+                        filter.withinMiles = nil
+                    } label: {
+                        checkedLabel("Any distance", checked: filter.withinMiles == nil)
+                    }
+                    ForEach(Self.radiusOptions, id: \.self) { miles in
+                        Button {
+                            filter.withinMiles = miles
+                        } label: {
+                            checkedLabel(miles == preferences.radiusMiles
+                                            ? "Within \(miles) mi (your default)"
+                                            : "Within \(miles) mi",
+                                         checked: filter.withinMiles == miles)
+                        }
+                    }
+                    if !Self.radiusOptions.contains(preferences.radiusMiles) {
+                        Button {
+                            filter.withinMiles = preferences.radiusMiles
+                        } label: {
+                            checkedLabel("Within \(preferences.radiusMiles) mi (your default)",
+                                         checked: filter.withinMiles == preferences.radiusMiles)
+                        }
+                    }
+                }
+                Divider()
+                Toggle("Include remote jobs", isOn: $filter.includeRemoteInRadius)
+            } else {
+                Text("Set a home location in Identity → Job filters to filter by distance.")
+            }
+        } label: {
+            chipLabel(filter.withinMiles.map { "Within \($0) mi" } ?? "Distance",
+                      systemImage: "location", active: filter.withinMiles != nil)
+        }
+        .accessibilityLabel(filter.withinMiles.map { "Showing jobs within \($0) miles of home" }
+                            ?? "Filter by distance from home")
+    }
+
+    private var postedMenu: some View {
+        Menu {
+            ForEach(Self.postedOptions) { option in
+                Button {
+                    filter.postedWithinDays = option.days
+                } label: {
+                    checkedLabel(option.label, checked: filter.postedWithinDays == option.days)
+                }
+            }
+        } label: {
+            chipLabel(postedTitle, systemImage: "calendar", active: filter.postedWithinDays != nil)
+        }
+        .accessibilityLabel("Filter by posting date: \(postedTitle)")
+    }
+
+    private var postedTitle: String {
+        guard let days = filter.postedWithinDays else { return "Posted" }
+        return Self.postedOptions.first { $0.days == days }?.label ?? "Past \(days) days"
     }
 
     private var salaryMenu: some View {
@@ -286,18 +466,6 @@ struct JobFeedView: View {
                 if isOn { selectedBrackets.insert(id) } else { selectedBrackets.remove(id) }
             }
         )
-    }
-
-    private var remoteChip: some View {
-        Button {
-            filter.remoteOnly.toggle()
-        } label: {
-            chipLabel("Remote", systemImage: "house", active: filter.remoteOnly)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(filter.remoteOnly
-            ? "Showing remote jobs only. Activate to include all locations."
-            : "Show remote jobs only")
     }
 
     private var jobTypeMenu: some View {
@@ -331,11 +499,7 @@ struct JobFeedView: View {
                 Button {
                     filter.minScore = option.value
                 } label: {
-                    if filter.minScore == option.value {
-                        Label(option.label, systemImage: "checkmark")
-                    } else {
-                        Text(option.label)
-                    }
+                    checkedLabel(option.label, checked: filter.minScore == option.value)
                 }
             }
         } label: {
@@ -345,16 +509,41 @@ struct JobFeedView: View {
         .accessibilityLabel("Filter by minimum match score")
     }
 
+    /// Hides Workday, iCIMS and the other portals that won't show the form
+    /// without an account — the applications she can't finish from her phone.
+    private var noAccountChip: some View {
+        Button {
+            filter.noAccountOnly.toggle()
+        } label: {
+            chipLabel("No account needed", systemImage: "person.crop.circle.badge.checkmark",
+                      active: filter.noAccountOnly)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(filter.noAccountOnly
+            ? "Hiding jobs that need an account. Activate to show them."
+            : "Hide jobs that need an account before applying")
+    }
+
     private var clearButton: some View {
         Button {
             selectedBrackets.removeAll()
             includeUnspecifiedSalary = true
-            filter = JobFilterQuery()
+            searchText = ""
+            filter = filter.cleared
         } label: {
             chipLabel("Clear", systemImage: "xmark.circle", active: false)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Clear all filters")
+        .accessibilityLabel("Clear all filters and search")
+    }
+
+    @ViewBuilder
+    private func checkedLabel(_ title: String, checked: Bool) -> some View {
+        if checked {
+            Label(title, systemImage: "checkmark")
+        } else {
+            Text(title)
+        }
     }
 
     private func chipLabel(_ title: String, systemImage: String, active: Bool) -> some View {
@@ -415,8 +604,8 @@ private struct PostingRow: View {
                 postedStamp(posted)
             }
 
-            if let chips = posting.details?.summaryChips, !chips.isEmpty {
-                Text(chips.joined(separator: " · "))
+            if !posting.cardChips.isEmpty {
+                Text(posting.cardChips.joined(separator: " · "))
                     .font(.subheadline)
                     .fixedSize(horizontal: false, vertical: true)
             }

@@ -31,7 +31,44 @@ public struct IngestedPosting: Codable, Identifiable, Equatable, Sendable {
     /// Which of her skills this posting asks for, and which it asks for that
     /// she doesn't list.
     public var skills: PostingSkills?
+    /// "remote", "hybrid", "onsite", or empty when the posting doesn't say.
+    /// Optional so an older server that doesn't send it still decodes.
+    public var workArrangement: String?
+    /// The day the employer listed it, "YYYY-MM-DD".
+    public var postedAt: String?
+    /// Straight-line miles from her saved home. Nil without a home, for remote
+    /// jobs, and when the posting has no known location.
+    public var distanceMiles: Double?
     public let createdAt: Date
+
+    public var workplace: Workplace? {
+        workArrangement.flatMap(Workplace.init(rawValue:))
+    }
+
+    /// "12 mi away", rounded the way a person would say it.
+    public var distanceLabel: String? {
+        guard let distanceMiles else { return nil }
+        if distanceMiles < 1 { return "Under 1 mi away" }
+        if distanceMiles < 10 {
+            return "\(distanceMiles.formatted(.number.precision(.fractionLength(0...1)))) mi away"
+        }
+        return "\(Int(distanceMiles.rounded())) mi away"
+    }
+
+    /// The collapsed card's one-line facts. Leads with the working arrangement
+    /// and distance when the server knows them; the board's own isRemote flag
+    /// is dropped then, since boards flag hybrid roles as remote too.
+    public var cardChips: [String] {
+        var chips = details?.summaryChips ?? []
+        guard let workplace else {
+            if let distanceLabel { chips.append(distanceLabel) }
+            return chips
+        }
+        chips.removeAll { $0.lowercased() == "remote" }
+        var lead = [workplace.label]
+        if let distanceLabel { lead.append(distanceLabel) }
+        return lead + chips
+    }
 
     /// Where the Apply button should send her.
     public var bestApplyLink: URL? {
