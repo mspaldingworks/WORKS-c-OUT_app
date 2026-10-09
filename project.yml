@@ -30,7 +30,9 @@ targets:
       properties:
         CFBundleDisplayName: WORKS(c)OUT
         WorksCoutAPIToken: $(WORKS_COUT_API_TOKEN)
-        UILaunchScreen: {}
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+          UIImageName: BrandMark
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
@@ -42,6 +44,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.mspaldingworks.WorksCout
         PRODUCT_NAME: WorksCout
         TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         SWIFT_VERSION: "5.10"
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: MNR8M8K86K
@@ -71,6 +75,8 @@ targets:
         DEVELOPMENT_TEAM: MNR8M8K86K
         ENABLE_HARDENED_RUNTIME: true
         COMBINE_HIDPI_IMAGES: true
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
     entitlements:
       path: Platforms/macOS/WorksCout.entitlements
       properties:

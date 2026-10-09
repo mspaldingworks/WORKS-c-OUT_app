@@ -263,8 +263,8 @@ struct StatusChip: View {
 
     private var tint: Color {
         switch status {
-        case .approved: return .green
-        case .applied: return .blue
+        case .approved: return Brand.positive
+        case .applied: return Brand.accent
         default: return .secondary
         }
     }
