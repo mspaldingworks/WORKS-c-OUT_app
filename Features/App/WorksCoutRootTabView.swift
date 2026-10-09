@@ -32,6 +32,8 @@ public struct WorksCoutRootTabView: View {
                 .pickerStyle(.segmented)
                 .padding()
 
+                BrandRule()
+
                 switch selectedSection {
                 case .jobFeed:
                     JobFeedView(client: client, onUnauthorized: { isConnecting = true })
@@ -46,7 +48,19 @@ public struct WorksCoutRootTabView: View {
                 }
             }
             .navigationTitle("Job Search")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    HStack(spacing: 8) {
+                        BrandMark(size: 26)
+                        BrandWordmark(height: 20)
+                    }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("WORKS(c)OUT")
+                    .accessibilityAddTraits(.isHeader)
+                }
                 // Only surfaced when there's actually nothing to authenticate
                 // with; otherwise it's clutter on a screen meant for reading jobs.
                 if WorksCoutConfig.resolvedToken == nil {
@@ -56,6 +70,7 @@ public struct WorksCoutRootTabView: View {
                 }
             }
         }
+        .tint(Brand.accent)
         .sheet(isPresented: $isConnecting) {
             NavigationStack {
                 WorksCoutSetupView { token in
@@ -69,6 +84,7 @@ public struct WorksCoutRootTabView: View {
                     }
                 }
             }
+            .tint(Brand.accent)
         }
     }
 }

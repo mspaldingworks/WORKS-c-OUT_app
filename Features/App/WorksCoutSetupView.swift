@@ -14,11 +14,12 @@ struct WorksCoutSetupView: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            Image(systemName: "briefcase.fill")
-                .font(.system(size: 48))
-                .accessibilityHidden(true)
+            BrandMark(size: 88)
+                .shadow(color: Brand.cobalt.opacity(0.25), radius: 12, y: 6)
+            BrandWordmark(height: 26)
             Text("Connect Job Search")
                 .font(.title2.weight(.semibold))
+                .foregroundStyle(Brand.heading)
             Text("Enter the API token generated for this device. This is a one-time setup, not an account.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)

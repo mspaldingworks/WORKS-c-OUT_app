@@ -36,9 +36,22 @@ struct WorksCoutMacRootView: View {
             }
             .navigationTitle("WORKS(c)OUT")
             .listStyle(.sidebar)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                HStack(spacing: 8) {
+                    BrandMark(size: 28)
+                    BrandWordmark(height: 18)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("WORKS(c)OUT")
+                .accessibilityAddTraits(.isHeader)
+            }
         } detail: {
             detail
         }
+        .tint(Brand.accent)
         .toolbar {
             if WorksCoutConfig.resolvedToken == nil {
                 ToolbarItem(placement: .primaryAction) {
@@ -52,7 +65,8 @@ struct WorksCoutMacRootView: View {
                 client = WorksCoutConfig.makeClient()
                 isConnecting = false
             }
-            .frame(minWidth: 420, minHeight: 260)
+            .frame(minWidth: 420, minHeight: 320)
+            .tint(Brand.accent)
         }
     }
 

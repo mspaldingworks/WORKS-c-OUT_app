@@ -356,7 +356,7 @@ struct IdentityView: View {
             if cred.isActive {
                 Label("In use", systemImage: "checkmark.circle.fill")
                     .labelStyle(.iconOnly)
-                    .foregroundStyle(.green)
+                    .foregroundStyle(Brand.positive)
                     .accessibilityLabel("\(cred.provider.displayName) is in use")
             } else {
                 Button("Use") { Task { await activateAICredential(cred) } }

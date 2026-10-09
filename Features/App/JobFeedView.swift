@@ -384,7 +384,7 @@ private struct PostingRow: View {
     /// match reads at a glance without parsing digits.
     private var scoreColor: Color {
         switch posting.score {
-        case 80...: return .green
+        case 80...: return Brand.positive
         case 55..<80: return .orange
         default: return .secondary
         }
@@ -505,10 +505,10 @@ private struct PostingRow: View {
             }
 
             if let skills = posting.skills, !skills.matched.isEmpty {
-                detailSection("Your skills this job asks for", items: skills.matched, tint: .green)
+                detailSection("Your skills this job asks for", items: skills.matched, tint: Brand.positive)
             }
             if let skills = posting.skills, !skills.missing.isEmpty {
-                detailSection("Asks for, not on your profile", items: skills.missing, tint: .indigo)
+                detailSection("Asks for, not on your profile", items: skills.missing, tint: Brand.learn)
             }
             if !details.benefits.isEmpty {
                 detailSection("Benefits", items: details.benefits)
@@ -548,19 +548,19 @@ private struct PostingRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// Teal, and nothing else on the card uses it — recency is the thing she
+    /// Brand teal, and nothing else on the card uses it — recency is the thing she
     /// scans for first, and it shouldn't have to compete with the score or the
     /// account badge. Paired with a clock, since colour is never the only
     /// signal (CLAUDE.md §3.2).
     private func postedStamp(_ posted: String) -> some View {
         Label(posted.localizedCapitalized, systemImage: "clock.fill")
             .font(.caption.weight(.semibold))
-            .foregroundStyle(Color.teal)
+            .foregroundStyle(Brand.fresh)
             .accessibilityLabel("Posted \(posted)")
     }
 
     /// Two counts, two colours, deliberately different shapes of information:
-    /// green for what she brings, indigo for what she'd be learning. Indigo
+    /// green for what she brings, violet for what she'd be learning. Violet
     /// rather than red or orange because a gap is context, not a warning — and
     /// because orange already means "needs an account" on this card.
     private func skillPills(_ skills: PostingSkills) -> some View {
@@ -569,14 +569,14 @@ private struct PostingRow: View {
                 pill(count: skills.matched.count,
                      noun: "skill match" + (skills.matched.count == 1 ? "" : "es"),
                      symbol: "checkmark.seal.fill",
-                     tint: .green,
+                     tint: Brand.positive,
                      spoken: "\(skills.matched.count) of your skills match: \(skills.matched.joined(separator: ", "))")
             }
             if !skills.missing.isEmpty {
                 pill(count: skills.missing.count,
                      noun: "to learn",
                      symbol: "book.fill",
-                     tint: .indigo,
+                     tint: Brand.learn,
                      spoken: "\(skills.missing.count) skills you don't list: \(skills.missing.joined(separator: ", "))")
             }
             Spacer(minLength: 0)
