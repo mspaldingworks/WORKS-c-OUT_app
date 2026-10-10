@@ -136,6 +136,7 @@ struct IdentityView: View {
         }
         .task { await load() }
         .refreshable { await load() }
+        .refreshButton("Refresh identity", isRefreshing: isLoading) { await load() }
         .fileImporter(isPresented: $pickingFile, allowedContentTypes: Self.allowedTypes) { result in
             if case .success(let url) = result {
                 pickedFile = PickedFile(url: url)

@@ -87,6 +87,7 @@ struct DraftsView: View {
         }
         .task { await load() }
         .refreshable { await load() }
+        .refreshButton("Refresh drafts", isRefreshing: isLoading) { await load() }
         .sheet(isPresented: $showingAddSheet) {
             AddApplicationView(client: client, companies: companies) {
                 Task { await load() }
