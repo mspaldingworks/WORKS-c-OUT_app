@@ -57,6 +57,7 @@ struct ApprovalsView: View {
         }
         .task { await load() }
         .refreshable { await load() }
+        .refreshButton("Refresh approvals", isRefreshing: isLoading) { await load() }
     }
 
     private func load() async {

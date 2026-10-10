@@ -80,6 +80,7 @@ struct JobFeedView: View {
         .onChange(of: selectedBrackets) { recomputeSalary() }
         .onChange(of: includeUnspecifiedSalary) { recomputeSalary() }
         .refreshable { await loadPostings() }
+        .refreshButton("Refresh the job feed", isRefreshing: isLoading) { await loadPostings() }
     }
 
     @ViewBuilder
