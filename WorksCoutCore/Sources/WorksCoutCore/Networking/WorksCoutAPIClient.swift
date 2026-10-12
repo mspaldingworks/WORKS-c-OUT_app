@@ -12,13 +12,14 @@ public enum WorksCoutAPIError: Error, Equatable, Sendable {
     case badRequest(String)
     case decodingFailed
     case transport
+    /// Too many tries in a row (sign-in and sign-up are throttled).
+    case tooManyAttempts
 }
 
 /// Talks to the WORKS(c)OUT API (see WORKS-c-OUT_api's `api/` Django service).
-/// Uses DRF TokenAuthentication — one long-lived per-account token, not a
-/// login flow. Server-side every row now belongs to a real account, so this
-/// token is what identifies whose data comes back; the app itself still has
-/// no login screen because there is exactly one account.
+/// Uses DRF TokenAuthentication — one long-lived token per account. Every row
+/// server-side belongs to an account, so the token is what decides whose data
+/// comes back. A client with an empty token can only sign in or sign up.
 public actor WorksCoutAPIClient {
     public struct Configuration: Sendable {
         public var baseURL: URL
@@ -66,6 +67,25 @@ public actor WorksCoutAPIClient {
         formatter.formatOptions = [.withInternetDateTime]
         return formatter
     }()
+
+    // MARK: Account
+
+    /// Make a new account and sign in to it. It starts empty: no profile,
+    /// skills, résumés or postings, and the default filter choices.
+    public func signUp(email: String, password: String) async throws -> AccountSession {
+        try await request("api/identity/auth/sign-up/", method: "POST",
+                          body: AccountCredentials(email: email, password: password))
+    }
+
+    public func signIn(email: String, password: String) async throws -> AccountSession {
+        try await request("api/identity/auth/sign-in/", method: "POST",
+                          body: AccountCredentials(email: email, password: password))
+    }
+
+    /// Whose token this client is using.
+    public func fetchAccount() async throws -> Account {
+        try await request("api/identity/auth/me/")
+    }
 
     // MARK: Applications
 
@@ -303,7 +323,7 @@ public actor WorksCoutAPIClient {
 
         var urlRequest = URLRequest(url: configuration.baseURL.appendingPathComponent("api/identity/resumes/"))
         urlRequest.httpMethod = "POST"
-        urlRequest.setValue("Token \(configuration.token)", forHTTPHeaderField: "Authorization")
+        authorize(&urlRequest)
         urlRequest.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         urlRequest.httpBody = body
         urlRequest.timeoutInterval = 60
@@ -359,7 +379,7 @@ public actor WorksCoutAPIClient {
 
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = method
-        urlRequest.setValue("Token \(configuration.token)", forHTTPHeaderField: "Authorization")
+        authorize(&urlRequest)
         if let timeout { urlRequest.timeoutInterval = timeout }
 
         if let body {
@@ -368,6 +388,13 @@ public actor WorksCoutAPIClient {
         }
 
         return try await perform(urlRequest)
+    }
+
+    /// No header at all when signed out: the server answers a bare "Token "
+    /// with a 401 even on the endpoints that need no account.
+    private func authorize(_ urlRequest: inout URLRequest) {
+        guard !configuration.token.isEmpty else { return }
+        urlRequest.setValue("Token \(configuration.token)", forHTTPHeaderField: "Authorization")
     }
 
     private func perform<T: Decodable>(_ urlRequest: URLRequest) async throws -> T {
@@ -389,6 +416,8 @@ public actor WorksCoutAPIClient {
             throw WorksCoutAPIError.notAuthenticated
         case 404:
             throw WorksCoutAPIError.notFound
+        case 429:
+            throw WorksCoutAPIError.tooManyAttempts
         case 422:
             let detail = (try? JSONDecoder().decode([String: String].self, from: data))?["detail"]
             throw WorksCoutAPIError.badRequest(detail ?? "That file couldn't be read.")

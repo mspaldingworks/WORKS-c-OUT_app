@@ -6,7 +6,10 @@ import UniformTypeIdentifiers
 struct IdentityView: View {
     let client: WorksCoutAPIClient
     let onUnauthorized: () -> Void
+    let onSignOut: () -> Void
 
+    // Whose account this is, for the Account section. Nil until it loads.
+    @State private var account: Account?
     @State private var skills: [Skill] = []
     @State private var links: [ProfileLink] = []
     @State private var resumes: [ResumeVersion] = []
@@ -100,6 +103,7 @@ struct IdentityView: View {
                     } header: {
                         Text("Résumés")
                     }
+                    accountSection
                 }
                 .listStyle(.inset)
             }
@@ -169,6 +173,9 @@ struct IdentityView: View {
             }
             if let connection = try? await client.fetchDriveConnection() {
                 drive = connection
+            }
+            if let me = try? await client.fetchAccount() {
+                account = me
             }
             errorMessage = nil
         } catch WorksCoutAPIError.notAuthenticated {
@@ -254,6 +261,29 @@ struct IdentityView: View {
             }
         } catch {
             errorMessage = "Couldn't add \(suggestion.name): \(error)"
+        }
+    }
+
+    // MARK: Account
+
+    /// Last in the list, where sign-out sits in most apps: who is signed in,
+    /// and the way out. No confirmation — nothing is lost by signing out, and
+    /// signing back in undoes it.
+    private var accountSection: some View {
+        Section {
+            if let account, !account.displayName.isEmpty {
+                LabeledContent("Signed in as", value: account.displayName)
+            }
+            Button(role: .destructive) {
+                onSignOut()
+            } label: {
+                Text("Sign Out")
+            }
+            .frame(minHeight: 44)
+        } header: {
+            Text("Account")
+        } footer: {
+            Text("Signing out only forgets this account on this device. Everything saved to it stays where it is, and you can sign back in or create a different account.")
         }
     }
 
@@ -433,7 +463,11 @@ struct IdentityView: View {
         } header: {
             Text("AI provider")
         } footer: {
-            Text("Bring your own AI by pasting an API key — not a subscription — from the provider's developer console. It's stored encrypted and used to write your materials. Leave it unset to use the built-in default.")
+            if account?.usesServerAIKey == false {
+                Text("This account needs its own AI key before it can read a résumé or write a draft. Paste an API key — not a subscription — from the provider's developer console. It's stored encrypted and used to write your materials.")
+            } else {
+                Text("Bring your own AI by pasting an API key — not a subscription — from the provider's developer console. It's stored encrypted and used to write your materials. Leave it unset to use the built-in default.")
+            }
         }
     }
 

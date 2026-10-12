@@ -1,14 +1,16 @@
 import WorksCoutCore
 import SwiftUI
 
-/// Root of the Job Search tab. Opens straight to the Job Feed — there is no
-/// setup gate. The token is baked in at build time (see WorksCoutConfig), and
-/// if it's ever missing or rejected the feed says so inline and offers to
-/// reconnect, rather than putting a screen in front of the jobs.
+/// Root of the app. With an account in use it opens straight to the Job Feed;
+/// her own builds have her token baked in (see WorksCoutConfig), so for her
+/// there is still no gate. Signed out, the sign-in screen takes the place of
+/// the sections. Signing out lives at the bottom of Identity.
 public struct WorksCoutRootTabView: View {
-    @State private var client = WorksCoutConfig.makeClient()
+    @State private var session = WorksCoutSessionModel()
     @State private var selectedSection = Section.jobFeed
-    @State private var isConnecting = false
+    // The server stopped accepting the token mid-session: offer sign-in over
+    // whatever is on screen rather than throwing it away.
+    @State private var isSigningIn = false
 
     enum Section: String, CaseIterable, Identifiable {
         case jobFeed = "Job Feed"
@@ -22,7 +24,34 @@ public struct WorksCoutRootTabView: View {
     public init() {}
 
     public var body: some View {
-        NavigationStack {
+        Group {
+            if session.isSignedIn {
+                sections
+                    // A different account means different everything: rebuild
+                    // rather than leave the last account's rows on screen.
+                    .id(session.generation)
+            } else {
+                WorksCoutSignInView(session: session)
+            }
+        }
+        .tint(Brand.accent)
+        .onChange(of: session.generation) { selectedSection = .jobFeed }
+        .sheet(isPresented: $isSigningIn) {
+            NavigationStack {
+                WorksCoutSignInView(session: session) { isSigningIn = false }
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Cancel") { isSigningIn = false }
+                        }
+                    }
+            }
+            .tint(Brand.accent)
+        }
+    }
+
+    private var sections: some View {
+        let client = session.client
+        return NavigationStack {
             VStack(spacing: 0) {
                 Picker("Section", selection: $selectedSection) {
                     ForEach(Section.allCases) { section in
@@ -36,15 +65,16 @@ public struct WorksCoutRootTabView: View {
 
                 switch selectedSection {
                 case .jobFeed:
-                    JobFeedView(client: client, onUnauthorized: { isConnecting = true })
+                    JobFeedView(client: client, onUnauthorized: { isSigningIn = true })
                 case .drafts:
-                    DraftsView(client: client, onUnauthorized: { isConnecting = true })
+                    DraftsView(client: client, onUnauthorized: { isSigningIn = true })
                 case .approvals:
-                    ApprovalsView(client: client, onUnauthorized: { isConnecting = true })
+                    ApprovalsView(client: client, onUnauthorized: { isSigningIn = true })
                 case .applied:
-                    AppliedView(client: client, onUnauthorized: { isConnecting = true })
+                    AppliedView(client: client, onUnauthorized: { isSigningIn = true })
                 case .identity:
-                    IdentityView(client: client, onUnauthorized: { isConnecting = true })
+                    IdentityView(client: client, onUnauthorized: { isSigningIn = true },
+                                 onSignOut: { session.signOut() })
                 }
             }
             .navigationTitle("Job Search")
@@ -61,30 +91,7 @@ public struct WorksCoutRootTabView: View {
                     .accessibilityLabel("WORKS(c)OUT")
                     .accessibilityAddTraits(.isHeader)
                 }
-                // Only surfaced when there's actually nothing to authenticate
-                // with; otherwise it's clutter on a screen meant for reading jobs.
-                if WorksCoutConfig.resolvedToken == nil {
-                    ToolbarItem(placement: .primaryAction) {
-                        Button("Connect") { isConnecting = true }
-                    }
-                }
             }
-        }
-        .tint(Brand.accent)
-        .sheet(isPresented: $isConnecting) {
-            NavigationStack {
-                WorksCoutSetupView { token in
-                    WorksCoutKeychain.saveToken(token)
-                    client = WorksCoutConfig.makeClient()
-                    isConnecting = false
-                }
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { isConnecting = false }
-                    }
-                }
-            }
-            .tint(Brand.accent)
         }
     }
 }
