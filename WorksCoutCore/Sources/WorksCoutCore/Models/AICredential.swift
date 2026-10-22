@@ -58,6 +58,9 @@ public struct AICredential: Codable, Identifiable, Equatable, Sendable {
     public var provider: AIProvider
     public var model: String
     public var baseUrl: String
+    /// Anthropic only: the workspace a key made outside any workspace runs in.
+    /// Optional so an older server that doesn't send it still decodes.
+    public var workspaceId: String?
     public var isActive: Bool
     public var maskedKey: String
     public let updatedAt: Date
@@ -67,14 +70,34 @@ public struct AICredential: Codable, Identifiable, Equatable, Sendable {
 /// `apiKey`/`baseUrl` become `api_key`/`base_url` on the wire.
 public struct NewAICredential: Encodable, Sendable {
     public var provider: AIProvider
+    /// Empty keeps the key already saved for this provider (the server only
+    /// requires one the first time), so a workspace can be added on its own.
     public var apiKey: String
     public var model: String
     public var baseUrl: String
+    public var workspaceId: String
 
-    public init(provider: AIProvider, apiKey: String, model: String = "", baseUrl: String = "") {
+    public init(provider: AIProvider, apiKey: String, model: String = "", baseUrl: String = "",
+                workspaceId: String = "") {
         self.provider = provider
         self.apiKey = apiKey
         self.model = model
         self.baseUrl = baseUrl
+        self.workspaceId = workspaceId
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case provider, apiKey, model, baseUrl, workspaceId
+    }
+
+    /// The key is left out entirely when blank — the server refuses a blank
+    /// key, but takes a missing one as "keep the saved key".
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(provider, forKey: .provider)
+        if !apiKey.isEmpty { try container.encode(apiKey, forKey: .apiKey) }
+        try container.encode(model, forKey: .model)
+        try container.encode(baseUrl, forKey: .baseUrl)
+        if provider == .anthropic { try container.encode(workspaceId, forKey: .workspaceId) }
     }
 }

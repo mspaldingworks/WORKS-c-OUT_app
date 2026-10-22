@@ -10,6 +10,7 @@ import SwiftUI
 struct ResumeUploadView: View {
     let client: WorksCoutAPIClient
     let fileURL: URL
+    let kind: DocumentKind
     let onSaved: (ResumeVersion) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -17,9 +18,11 @@ struct ResumeUploadView: View {
     @State private var isSaving = false
     @State private var errorMessage: String?
 
-    init(client: WorksCoutAPIClient, fileURL: URL, onSaved: @escaping (ResumeVersion) -> Void) {
+    init(client: WorksCoutAPIClient, fileURL: URL, kind: DocumentKind = .resume,
+         onSaved: @escaping (ResumeVersion) -> Void) {
         self.client = client
         self.fileURL = fileURL
+        self.kind = kind
         self.onSaved = onSaved
         _title = State(initialValue: fileURL.deletingPathExtension().lastPathComponent)
     }
@@ -37,7 +40,7 @@ struct ResumeUploadView: View {
                     Text(errorMessage).foregroundStyle(.red).font(.footnote)
                 }
             }
-            .navigationTitle("Add Résumé")
+            .navigationTitle(kind == .resume ? "Add Résumé" : "Add Cover Letter")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -68,7 +71,8 @@ struct ResumeUploadView: View {
                 ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 : "application/pdf"
             let uploaded = try await client.uploadResume(
-                title: title, fileData: data, filename: fileURL.lastPathComponent, mimeType: mimeType
+                title: title, kind: kind, fileData: data, filename: fileURL.lastPathComponent,
+                mimeType: mimeType
             )
             onSaved(uploaded)
             dismiss()

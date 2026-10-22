@@ -11,13 +11,22 @@ public struct DriveConnection: Codable, Equatable, Sendable {
     public var enabled: Bool
     public var accountEmail: String
     public var folderId: String
+    /// Where generated files are saved; blank means the app's own
+    /// "WORKS(c)OUT Applications" folder.
+    public var folderName: String
+    /// The server is set up for Google's file picker, so files and a folder
+    /// can be chosen from Drive.
+    public var pickerAvailable: Bool
 
     public init(connected: Bool = false, enabled: Bool = false,
-                accountEmail: String = "", folderId: String = "") {
+                accountEmail: String = "", folderId: String = "",
+                folderName: String = "", pickerAvailable: Bool = false) {
         self.connected = connected
         self.enabled = enabled
         self.accountEmail = accountEmail
         self.folderId = folderId
+        self.folderName = folderName
+        self.pickerAvailable = pickerAvailable
     }
 
     /// Lenient decode so a missing field defaults off rather than failing.
@@ -27,5 +36,7 @@ public struct DriveConnection: Codable, Equatable, Sendable {
         enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
         accountEmail = try container.decodeIfPresent(String.self, forKey: .accountEmail) ?? ""
         folderId = try container.decodeIfPresent(String.self, forKey: .folderId) ?? ""
+        folderName = try container.decodeIfPresent(String.self, forKey: .folderName) ?? ""
+        pickerAvailable = try container.decodeIfPresent(Bool.self, forKey: .pickerAvailable) ?? false
     }
 }

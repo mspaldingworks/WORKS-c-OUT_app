@@ -16,6 +16,10 @@ struct IdentityView: View {
     @State private var errorMessage: String?
     @State private var pickingFile = false
     @State private var pickedFile: PickedFile?
+    // Which kind of document the device file picker is choosing for.
+    @State private var uploadKind: DocumentKind = .resume
+    // Set while picked Drive files are being copied in.
+    @State private var importingKind: DocumentKind?
     @State private var parsingResumeID: Int?
     @State private var addingSkillKey: String?
     @State private var addingAllFromResumeID: Int?
@@ -36,6 +40,7 @@ struct IdentityView: View {
     @State private var newAIKey = ""
     @State private var newAIModel = ""
     @State private var newAIBaseURL = ""
+    @State private var newAIWorkspace = ""
     @State private var savingAI = false
     // The user's own Google Drive: generated drafts/résumés save there when
     // connected and enabled. The token lives only on the server.
@@ -57,6 +62,7 @@ struct IdentityView: View {
                     // scores, the Job type filter, drafts — starts from one.
                     resumesSection
                     skillsSection
+                    coverLettersSection
                     filterSection
                     aiProviderSection
                     driveSection
@@ -94,22 +100,33 @@ struct IdentityView: View {
         }
         .overlay(alignment: .bottom) {
             if let errorMessage {
-                Text(errorMessage)
-                    .font(.footnote)
-                    .padding(8)
-                    .background(.red.opacity(0.15), in: RoundedRectangle(cornerRadius: 8))
-                    .padding()
+                // Dismissible: a long message otherwise sits over the list.
+                HStack(alignment: .top, spacing: 8) {
+                    Text(errorMessage)
+                        .font(.footnote)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Button {
+                        self.errorMessage = nil
+                    } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .buttonStyle(.plain)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .accessibilityLabel("Dismiss this message")
+                }
+                .padding(.leading, 12)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                .background(.red.opacity(0.15), in: RoundedRectangle(cornerRadius: 10))
+                .padding()
             }
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button {
-                    pickingFile = true
-                } label: {
+                uploadMenu(.resume) {
                     Label("Add résumé", systemImage: "doc.badge.plus")
                 }
                 .frame(minWidth: 44, minHeight: 44)
-                .accessibilityLabel("Upload a résumé")
+                .accessibilityLabel("Add a résumé")
             }
         }
         .task { await load() }
@@ -117,16 +134,16 @@ struct IdentityView: View {
         .refreshButton("Refresh identity", isRefreshing: isLoading) { await load() }
         .fileImporter(isPresented: $pickingFile, allowedContentTypes: Self.allowedTypes) { result in
             if case .success(let url) = result {
-                pickedFile = PickedFile(url: url)
+                pickedFile = PickedFile(url: url, kind: uploadKind)
             }
         }
         .sheet(item: $pickedFile) { file in
-            ResumeUploadView(client: client, fileURL: file.url) { uploaded in
-                // Uploading is for processing: read it straight away rather
-                // than leaving a second button to find.
+            ResumeUploadView(client: client, fileURL: file.url, kind: file.kind) { uploaded in
+                // Uploading a résumé is for processing: read it straight away
+                // rather than leaving a second button to find.
                 Task {
                     await load()
-                    if let resume = resumes.first(where: { $0.id == uploaded.id }) {
+                    if !uploaded.isCoverLetter, let resume = resumes.first(where: { $0.id == uploaded.id }) {
                         await parse(resume)
                     }
                 }
@@ -141,14 +158,17 @@ struct IdentityView: View {
 
     // MARK: Résumés and skills
 
+    private var resumeDocuments: [ResumeVersion] { resumes.filter { !$0.isCoverLetter } }
+    private var coverLetters: [ResumeVersion] { resumes.filter(\.isCoverLetter) }
+
     private var resumesSection: some View {
         Section {
-            if resumes.isEmpty {
+            if resumeDocuments.isEmpty {
                 Text("Upload your résumé to get started. Claude reads it and suggests your skills. The skills you add rank your Job Feed and become its Job type filters.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
-            ForEach(resumes) { resume in
+            ForEach(resumeDocuments) { resume in
                 ResumeRow(
                     resume: resume,
                     isParsing: parsingResumeID == resume.id,
@@ -160,7 +180,7 @@ struct IdentityView: View {
                     onAddAll: { Task { await addAllSkills(from: resume) } }
                 )
             }
-            uploadButton
+            uploadButton(.resume, prominent: resumeDocuments.isEmpty)
         } header: {
             Text("Résumés")
         } footer: {
@@ -172,19 +192,78 @@ struct IdentityView: View {
         }
     }
 
+    private var coverLettersSection: some View {
+        Section {
+            if coverLetters.isEmpty {
+                Text("Optional. Add a cover letter you've written and drafts will sound like you.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(coverLetters) { letter in
+                ResumeRow(
+                    resume: letter,
+                    showsSkillTools: false,
+                    isParsing: false,
+                    addingSkillKey: nil,
+                    isAddingAll: false,
+                    onParse: {},
+                    onRemove: { Task { await remove(letter) } },
+                    onAddSkill: { _ in },
+                    onAddAll: {}
+                )
+            }
+            uploadButton(.coverLetter, prominent: false)
+        } header: {
+            Text("Cover letters")
+        } footer: {
+            if !coverLetters.isEmpty {
+                Text("Drafts copy the newest letter's voice and tone. Facts still come only from your résumé.")
+            }
+        }
+    }
+
+    /// One button per kind of document, offering the device's files or the
+    /// person's Google Drive.
     @ViewBuilder
-    private var uploadButton: some View {
-        let label = Label(resumes.isEmpty ? "Upload résumé" : "Upload another résumé",
-                          systemImage: "doc.badge.plus")
+    private func uploadButton(_ kind: DocumentKind, prominent: Bool) -> some View {
+        let isEmpty = kind == .resume ? resumeDocuments.isEmpty : coverLetters.isEmpty
+        let title = kind == .resume
+            ? (isEmpty ? "Upload résumé" : "Upload another résumé")
+            : (isEmpty ? "Upload a cover letter" : "Upload another cover letter")
+        let menu = uploadMenu(kind) {
+            HStack {
+                if importingKind == kind {
+                    ProgressView()
+                } else {
+                    Label(title, systemImage: "doc.badge.plus")
+                }
+            }
             .frame(maxWidth: .infinity, minHeight: 36)
-        if resumes.isEmpty {
-            Button { pickingFile = true } label: { label }
-                .buttonStyle(.borderedProminent)
-                .accessibilityLabel("Upload a résumé")
+        }
+        .disabled(importingKind != nil)
+        .accessibilityLabel(title)
+        if prominent {
+            menu.menuStyle(.button).buttonStyle(.borderedProminent)
         } else {
-            Button { pickingFile = true } label: { label }
-                .buttonStyle(.bordered)
-                .accessibilityLabel("Upload another résumé")
+            menu.menuStyle(.button).buttonStyle(.bordered)
+        }
+    }
+
+    private func uploadMenu<L: View>(_ kind: DocumentKind, @ViewBuilder label: () -> L) -> some View {
+        Menu {
+            Button {
+                uploadKind = kind
+                pickingFile = true
+            } label: {
+                Label("From this device…", systemImage: "folder")
+            }
+            Button {
+                Task { await importFromDrive(kind) }
+            } label: {
+                Label("From Google Drive…", systemImage: "externaldrive.connected.to.line.below")
+            }
+        } label: {
+            label()
         }
     }
 
@@ -388,6 +467,90 @@ struct IdentityView: View {
         }
     }
 
+    // MARK: Google Drive documents
+
+    /// Pick résumés or cover letters in Google's own picker and copy them in.
+    /// Connects Drive first when it isn't yet.
+    private func importFromDrive(_ kind: DocumentKind) async {
+        guard drive.pickerAvailable else {
+            errorMessage = "Choosing files from Google Drive isn't set up on the server yet. Use “From this device” for now."
+            return
+        }
+        if !drive.connected {
+            await connectDrive()
+            guard drive.connected else { return }
+        }
+        guard let ids = await runDrivePicker(mode: "documents") else { return }
+        importingKind = kind
+        defer { importingKind = nil }
+        do {
+            let result = try await client.importFromDrive(fileIDs: ids, kind: kind)
+            await load()
+            errorMessage = result.refused.isEmpty ? nil : result.refused
+                .map { refusal in (refusal.name.map { "\($0): " } ?? "") + refusal.detail }
+                .joined(separator: "\n")
+            if kind == .resume {
+                for created in result.created {
+                    if let resume = resumes.first(where: { $0.id == created.id }) {
+                        await parse(resume)
+                    }
+                }
+            }
+        } catch WorksCoutAPIError.notAuthenticated {
+            onUnauthorized()
+        } catch WorksCoutAPIError.unavailable(let detail) {
+            errorMessage = detail
+        } catch {
+            errorMessage = "Couldn't copy those files from Google Drive: \(error)"
+        }
+    }
+
+    /// Opens Google's picker in the in-app browser. Returns the chosen ids, or
+    /// nil when cancelled or refused (with the reason in errorMessage).
+    private func runDrivePicker(mode: String) async -> [String]? {
+        do {
+            let url = try await client.drivePickerURL(mode: mode)
+            // Retained for the call: the session holds its presentation provider weakly.
+            let coordinator = WebAuthCoordinator()
+            guard let callback = try await coordinator.authenticate(url: url, callbackScheme: "workscout") else {
+                return nil  // closed the browser
+            }
+            let items = URLComponents(url: callback, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            func value(_ name: String) -> String? { items.first { $0.name == name }?.value }
+            if let error = value("error") {
+                errorMessage = error
+                return nil
+            }
+            let ids = (value("ids") ?? "").split(separator: ",").map(String.init).filter { !$0.isEmpty }
+            return ids.isEmpty ? nil : ids
+        } catch WorksCoutAPIError.notAuthenticated {
+            onUnauthorized()
+        } catch WorksCoutAPIError.unavailable(let detail) {
+            errorMessage = detail
+        } catch {
+            errorMessage = "Couldn't open Google Drive: \(error)"
+        }
+        return nil
+    }
+
+    private func chooseDriveFolder() async {
+        guard let ids = await runDrivePicker(mode: "folder"), let folderID = ids.first else { return }
+        await setDriveFolder(folderID)
+    }
+
+    private func setDriveFolder(_ folderID: String) async {
+        driveBusy = true
+        defer { driveBusy = false }
+        do {
+            drive = try await client.setDriveFolder(id: folderID)
+            errorMessage = nil
+        } catch WorksCoutAPIError.badRequest(let detail) {
+            errorMessage = detail
+        } catch {
+            errorMessage = "Couldn't change the Drive folder: \(error)"
+        }
+    }
+
     // MARK: Account
 
     /// Last in the list, where sign-out sits in most apps: who is signed in,
@@ -524,9 +687,17 @@ struct IdentityView: View {
                     Text(provider.displayName).tag(provider)
                 }
             }
-            SecureField("API key", text: $newAIKey)
+            SecureField(savedCredential == nil ? "API key" : "API key (leave blank to keep the saved one)",
+                        text: $newAIKey)
             TextField(newAIProvider.modelPlaceholder, text: $newAIModel)
                 .autocorrectionDisabled()
+            if newAIProvider == .anthropic {
+                TextField("Workspace ID, only if your key needs one (wrkspc_…)", text: $newAIWorkspace)
+                    .autocorrectionDisabled()
+                    #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                    #endif
+            }
             if newAIProvider.needsBaseURL {
                 TextField("Base URL (https://…)", text: $newAIBaseURL)
                     .autocorrectionDisabled()
@@ -536,6 +707,8 @@ struct IdentityView: View {
             } label: {
                 if savingAI {
                     ProgressView()
+                } else if newAIKey.isEmpty && savedCredential != nil {
+                    Text("Save settings for \(newAIProvider.displayName)")
                 } else {
                     Text("Save & use \(newAIProvider.displayName)")
                 }
@@ -555,13 +728,23 @@ struct IdentityView: View {
             } else {
                 Text("Bring your own AI by pasting an API key — not a subscription — from the provider's developer console. It's stored encrypted and used to write your materials. Leave it unset to use the built-in default.")
             }
+            if newAIProvider == .anthropic {
+                Text("A Claude key made inside a workspace needs nothing more. A key made outside one needs that workspace's ID, from the Claude Console's Workspaces page.")
+            }
         }
+    }
+
+    /// The key already saved for the provider being edited, if any — with one,
+    /// the other settings can be changed without pasting the key again.
+    private var savedCredential: AICredential? {
+        aiCredentials.first { $0.provider == newAIProvider }
     }
 
     private var saveAIDisabled: Bool {
         savingAI
-            || newAIKey.trimmingCharacters(in: .whitespaces).isEmpty
-            || (newAIProvider.needsBaseURL && newAIBaseURL.trimmingCharacters(in: .whitespaces).isEmpty)
+            || (newAIKey.trimmingCharacters(in: .whitespaces).isEmpty && savedCredential == nil)
+            || (newAIProvider.needsBaseURL && newAIBaseURL.trimmingCharacters(in: .whitespaces).isEmpty
+                && savedCredential?.baseUrl.isEmpty != false)
     }
 
     @ViewBuilder
@@ -572,6 +755,11 @@ struct IdentityView: View {
                 Text("\(cred.model.isEmpty ? cred.provider.modelPlaceholder : cred.model) · key \(cred.maskedKey)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if let workspace = cred.workspaceId, !workspace.isEmpty {
+                    Text("Workspace \(workspace)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             Spacer()
             if cred.isActive {
@@ -611,10 +799,11 @@ struct IdentityView: View {
                     provider: newAIProvider,
                     apiKey: newAIKey.trimmingCharacters(in: .whitespacesAndNewlines),
                     model: newAIModel.trimmingCharacters(in: .whitespacesAndNewlines),
-                    baseUrl: newAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+                    baseUrl: newAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines),
+                    workspaceId: newAIWorkspace.trimmingCharacters(in: .whitespacesAndNewlines)
                 )
             )
-            newAIKey = ""; newAIModel = ""; newAIBaseURL = ""
+            newAIKey = ""; newAIModel = ""; newAIBaseURL = ""; newAIWorkspace = ""
             await loadAICredentials()
             errorMessage = nil
         } catch WorksCoutAPIError.notAuthenticated {
@@ -662,6 +851,23 @@ struct IdentityView: View {
                     if driveBusy { ProgressView() }
                 }
                 Toggle("Save drafts & résumés to my Google Drive", isOn: driveEnabledBinding)
+                LabeledContent("Saves to", value: drive.folderName.isEmpty ? "WORKS(c)OUT Applications" : drive.folderName)
+                if drive.pickerAvailable {
+                    Button {
+                        Task { await chooseDriveFolder() }
+                    } label: {
+                        Label("Choose a different folder…", systemImage: "folder.badge.gearshape")
+                    }
+                    .frame(minHeight: 44)
+                    .disabled(driveBusy)
+                    if !drive.folderName.isEmpty {
+                        Button("Go back to the WORKS(c)OUT folder") {
+                            Task { await setDriveFolder("") }
+                        }
+                        .frame(minHeight: 44)
+                        .disabled(driveBusy)
+                    }
+                }
                 Button(role: .destructive) {
                     Task { await disconnectDrive() }
                 } label: {
@@ -671,7 +877,7 @@ struct IdentityView: View {
                 .disabled(driveBusy)
                 .accessibilityLabel("Disconnect Google Drive")
             } else {
-                Text("Connect Google Drive to have your generated cover letters and résumés saved to your own Drive — ready to attach at an employer's upload dialog.")
+                Text("Connect Google Drive to bring in résumés and cover letters from it, and to have your generated ones saved there — ready to attach at an employer's upload dialog.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Button {
@@ -690,7 +896,7 @@ struct IdentityView: View {
         } header: {
             Text("Google Drive")
         } footer: {
-            Text("Uses drive.file access — the app can only see files it creates in your Drive, never anything else.")
+            Text("Uses drive.file access: the app sees only files it creates and ones you pick for it, never anything else in your Drive.")
         }
     }
 
@@ -750,12 +956,15 @@ struct IdentityView: View {
 private struct PickedFile: Identifiable {
     let id = UUID()
     let url: URL
+    let kind: DocumentKind
 }
 
 private struct ResumeRow: View {
     @Environment(\.dynamicTypeSize) private var typeSize
 
     let resume: ResumeVersion
+    /// Cover letters aren't read for skills, so they get no parse or suggestions.
+    var showsSkillTools = true
     let isParsing: Bool
     let addingSkillKey: String?
     let isAddingAll: Bool
@@ -769,19 +978,21 @@ private struct ResumeRow: View {
             if typeSize.isAccessibilitySize {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(resume.title).font(.headline)
-                    parseButton
+                    if showsSkillTools { parseButton }
                     removeButton
                 }
             } else {
                 HStack(alignment: .firstTextBaseline) {
                     Text(resume.title).font(.headline)
                     Spacer()
-                    parseButton
+                    if showsSkillTools { parseButton }
                     removeButton
                 }
             }
 
-            if isParsing && !resume.parsedData.hasContent {
+            if !showsSkillTools {
+                EmptyView()
+            } else if isParsing && !resume.parsedData.hasContent {
                 Label("Reading your résumé…", systemImage: "sparkles")
                     .font(.caption)
                     .foregroundStyle(.secondary)

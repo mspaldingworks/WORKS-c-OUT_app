@@ -255,6 +255,30 @@ public actor WorksCoutAPIClient {
 
     // MARK: Google Drive
 
+    /// A one-use, ten-minute link to Google's file picker for this account's
+    /// Drive. Mode "documents" picks résumés/cover letters; "folder" picks
+    /// where generated files are saved.
+    public func drivePickerURL(mode: String) async throws -> URL {
+        struct Link: Decodable { let pickerUrl: String }
+        let link: Link = try await request("api/identity/drive/picker-link/",
+                                            queryItems: [URLQueryItem(name: "mode", value: mode)])
+        guard let url = URL(string: link.pickerUrl) else { throw WorksCoutAPIError.decodingFailed }
+        return url
+    }
+
+    /// Copy picked Drive files in as résumés or cover letters.
+    public func importFromDrive(fileIDs: [String], kind: DocumentKind) async throws -> DriveImportResult {
+        struct Body: Encodable { let fileIds: [String]; let kind: String }
+        return try await request("api/identity/drive/import/", method: "POST",
+                                 body: Body(fileIds: fileIDs, kind: kind.rawValue), timeout: 120)
+    }
+
+    /// Save generated files into this Drive folder; empty goes back to the
+    /// app's own folder.
+    public func setDriveFolder(id: String) async throws -> DriveConnection {
+        try await request("api/identity/drive/folder/", method: "POST", body: ["folder_id": id], timeout: 60)
+    }
+
     /// This account's Drive connection status (never the token itself).
     public func fetchDriveConnection() async throws -> DriveConnection {
         try await request("api/identity/drive/")
@@ -299,8 +323,8 @@ public actor WorksCoutAPIClient {
     /// Uploads a résumé file. Multipart, not JSON — Django's file parser
     /// expects multipart/form-data for a FileField, and the server validates
     /// size/type/count itself regardless of what this client already checked.
-    public func uploadResume(title: String, notes: String = "", fileData: Data,
-                              filename: String, mimeType: String) async throws -> ResumeVersion {
+    public func uploadResume(title: String, notes: String = "", kind: DocumentKind = .resume,
+                              fileData: Data, filename: String, mimeType: String) async throws -> ResumeVersion {
         let boundary = "WorksCoutBoundary-\(UUID().uuidString)"
         var body = Data()
 
@@ -310,6 +334,7 @@ public actor WorksCoutAPIClient {
             body.append("\(value)\r\n".data(using: .utf8)!)
         }
         appendField("title", title)
+        appendField("kind", kind.rawValue)
         if !notes.isEmpty { appendField("notes", notes) }
 
         body.append("--\(boundary)\r\n".data(using: .utf8)!)

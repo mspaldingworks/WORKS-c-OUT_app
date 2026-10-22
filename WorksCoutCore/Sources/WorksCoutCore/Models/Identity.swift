@@ -85,11 +85,43 @@ public struct ParsedSkillSuggestion: Codable, Equatable, Sendable, Identifiable 
     public var id: String { name }
 }
 
+/// What an uploaded document is. Résumés are read for skills; a cover letter
+/// is a sample of the person's voice for drafts.
+public enum DocumentKind: String, Codable, Sendable, CaseIterable {
+    case resume
+    case coverLetter = "cover_letter"
+
+    /// Anything unrecognised is treated as a résumé, the original kind.
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = DocumentKind(rawValue: raw) ?? .resume
+    }
+
+    public var label: String { self == .resume ? "résumé" : "cover letter" }
+}
+
 public struct ResumeVersion: Codable, Identifiable, Equatable, Sendable {
     public let id: Int
+    /// Optional so an older server that doesn't send it still decodes.
+    public var kind: DocumentKind?
     public var title: String
     public var file: String
     public var notes: String
     public var parsedData: ParsedResumeData
     public let createdAt: Date
+
+    public var isCoverLetter: Bool { kind == .coverLetter }
+}
+
+/// What came of copying picked Drive files in: the documents made, and why
+/// any others weren't taken.
+public struct DriveImportResult: Decodable, Sendable {
+    public struct Refusal: Decodable, Sendable {
+        public var fileId: String
+        public var name: String?
+        public var detail: String
+    }
+
+    public var created: [ResumeVersion]
+    public var refused: [Refusal]
 }
