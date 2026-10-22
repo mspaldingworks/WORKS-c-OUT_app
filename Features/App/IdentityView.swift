@@ -45,6 +45,8 @@ struct IdentityView: View {
     // The user's own Google Drive: generated drafts/résumés save there when
     // connected and enabled. The token lives only on the server.
     @State private var drive = DriveConnection()
+    // Where documents are kept: here, Google Drive, or both.
+    @State private var documentSettings = DocumentSettings()
     @State private var driveBusy = false
 
     private static let allowedTypes: [UTType] = [
@@ -65,6 +67,7 @@ struct IdentityView: View {
                     coverLettersSection
                     filterSection
                     aiProviderSection
+                    savingSection
                     driveSection
                     if !links.isEmpty {
                         Section("Profile links") {
@@ -213,6 +216,16 @@ struct IdentityView: View {
                 )
             }
             uploadButton(.coverLetter, prominent: false)
+            #if os(iOS)
+            // On the Mac the library is its own item in the sidebar.
+            NavigationLink {
+                CoverLetterLibraryView(client: client, onUnauthorized: onUnauthorized)
+                    .navigationTitle("Cover letters")
+            } label: {
+                Label("Open the cover letter library", systemImage: "books.vertical")
+            }
+            .frame(minHeight: 44)
+            #endif
         } header: {
             Text("Cover letters")
         } footer: {
@@ -320,6 +333,9 @@ struct IdentityView: View {
             }
             if let connection = try? await client.fetchDriveConnection() {
                 drive = connection
+            }
+            if let settings = try? await client.fetchDocumentSettings() {
+                documentSettings = settings
             }
             if let me = try? await client.fetchAccount() {
                 account = me
@@ -465,6 +481,66 @@ struct IdentityView: View {
         } catch {
             errorMessage = "Couldn't remove \(skill.name): \(error)"
         }
+    }
+
+    // MARK: Where documents are saved
+
+    private var savingSection: some View {
+        Section {
+            Picker("Save documents in", selection: storageBinding) {
+                ForEach(DocumentStorage.allCases) { option in
+                    Text(option.label).tag(option)
+                }
+            }
+            #if os(iOS)
+            .pickerStyle(.inline)
+            .labelsHidden()
+            #endif
+        } header: {
+            Text("Where documents are saved")
+        } footer: {
+            Text(storageFooter)
+        }
+    }
+
+    private var storageFooter: String {
+        let base = "Applies to résumés and cover letters you add, and the cover letters and résumés WORKS(c)OUT writes for you. Anything already saved stays where it is."
+        switch documentSettings.storage {
+        case .drive:
+            return base + " With Google Drive only, WORKS(c)OUT keeps no copy of the file — just the draft's text, so you can review and edit it here."
+        case .both, .app:
+            return documentSettings.driveAvailable ? base : base + " Connect Google Drive below to save there."
+        }
+    }
+
+    /// Choosing a Drive option without a connected Drive is refused here with
+    /// the way forward, rather than leaving the picker on a choice that can't work.
+    private var storageBinding: Binding<DocumentStorage> {
+        Binding(
+            get: { documentSettings.storage },
+            set: { choice in
+                guard choice != documentSettings.storage else { return }
+                if choice != .app && !documentSettings.driveAvailable {
+                    errorMessage = "Connect Google Drive below first, then choose where documents are saved."
+                    return
+                }
+                let previous = documentSettings
+                documentSettings.storage = choice
+                Task {
+                    do {
+                        documentSettings = try await client.updateDocumentStorage(choice)
+                        drive = (try? await client.fetchDriveConnection()) ?? drive
+                        errorMessage = nil
+                    } catch WorksCoutAPIError.badRequest(let detail) {
+                        documentSettings = previous
+                        errorMessage = detail
+                    } catch {
+                        documentSettings = previous
+                        errorMessage = "Couldn't change where documents are saved: \(error)"
+                    }
+                }
+            }
+        )
     }
 
     // MARK: Google Drive documents
@@ -850,7 +926,6 @@ struct IdentityView: View {
                     Spacer()
                     if driveBusy { ProgressView() }
                 }
-                Toggle("Save drafts & résumés to my Google Drive", isOn: driveEnabledBinding)
                 LabeledContent("Saves to", value: drive.folderName.isEmpty ? "WORKS(c)OUT Applications" : drive.folderName)
                 if drive.pickerAvailable {
                     Button {
@@ -900,10 +975,6 @@ struct IdentityView: View {
         }
     }
 
-    private var driveEnabledBinding: Binding<Bool> {
-        Binding(get: { drive.enabled }, set: { newValue in Task { await setDriveEnabled(newValue) } })
-    }
-
     private func connectDrive() async {
         driveBusy = true
         defer { driveBusy = false }
@@ -918,6 +989,7 @@ struct IdentityView: View {
             let items = URLComponents(url: callback, resolvingAgainstBaseURL: false)?.queryItems
             if items?.first(where: { $0.name == "ok" })?.value == "1" {
                 drive = (try? await client.fetchDriveConnection()) ?? drive
+                documentSettings = (try? await client.fetchDocumentSettings()) ?? documentSettings
                 errorMessage = nil
             } else {
                 errorMessage = items?.first(where: { $0.name == "reason" })?.value
@@ -929,16 +1001,6 @@ struct IdentityView: View {
             onUnauthorized()
         } catch {
             errorMessage = "Couldn't connect Google Drive: \(error)"
-        }
-    }
-
-    private func setDriveEnabled(_ enabled: Bool) async {
-        driveBusy = true
-        defer { driveBusy = false }
-        do {
-            drive = try await client.setDriveEnabled(enabled)
-        } catch {
-            errorMessage = "Couldn't update the Drive setting: \(error)"
         }
     }
 
@@ -990,6 +1052,8 @@ private struct ResumeRow: View {
                 }
             }
 
+            storageLine
+
             if !showsSkillTools {
                 EmptyView()
             } else if isParsing && !resume.parsedData.hasContent {
@@ -1002,6 +1066,25 @@ private struct ResumeRow: View {
         }
         .padding(.vertical, 6)
         .accessibilityElement(children: .contain)
+    }
+
+    /// Where this document is kept, and a way to it in Drive.
+    @ViewBuilder
+    private var storageLine: some View {
+        if resume.storedIn != nil || resume.isInDrive {
+            HStack(spacing: 10) {
+                Label(resume.isInApp ? (resume.isInDrive ? "In WORKS(c)OUT and Drive" : "In WORKS(c)OUT")
+                                     : "In Google Drive",
+                      systemImage: resume.isInApp ? "iphone" : "externaldrive")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if let link = resume.driveUrl, let url = URL(string: link), !link.isEmpty {
+                    Link("Open in Drive", destination: url)
+                        .font(.caption)
+                        .frame(minHeight: 44)
+                }
+            }
+        }
     }
 
     /// No confirmation dialog — an Undo banner appears instead, per §3.5.

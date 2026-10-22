@@ -108,9 +108,16 @@ public struct ResumeVersion: Codable, Identifiable, Equatable, Sendable {
     public var file: String
     public var notes: String
     public var parsedData: ParsedResumeData
+    /// Where the Drive copy (or the Drive original) is; nil or blank when the
+    /// document isn't in Drive.
+    public var driveUrl: String?
+    /// "app", "drive" or "both". Optional so an older server still decodes.
+    public var storedIn: String?
     public let createdAt: Date
 
     public var isCoverLetter: Bool { kind == .coverLetter }
+    public var isInDrive: Bool { !(driveUrl ?? "").isEmpty }
+    public var isInApp: Bool { storedIn != "drive" }
 }
 
 /// What came of copying picked Drive files in: the documents made, and why

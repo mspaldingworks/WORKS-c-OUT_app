@@ -208,3 +208,38 @@ struct PostingSkillsDecodingTests {
         #expect(skills.hasAnything == false)
     }
 }
+
+@Suite struct LibraryDecodingTests {
+    private func decoder() -> JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }
+
+    @Test func aWrittenLetterDecodes() throws {
+        let json = """
+        [{"id": "generated-4", "source": "generated", "title": "Grant Writer", "company": "Helping Hands",
+          "created_at": "2026-10-20T12:00:00Z", "status": "Applied", "text": "Dear team,",
+          "preview": "Dear team,", "file_url": "", "drive_url": "https://drive.test/x", "stored_in": "drive",
+          "application_id": 3, "posting_id": 4}]
+        """
+        let entries = try decoder().decode([CoverLetterEntry].self, from: Data(json.utf8))
+        #expect(entries[0].isGenerated)
+        #expect(entries[0].isInDrive)
+        #expect(!entries[0].isInApp)
+    }
+
+    @Test func missingFieldsDefaultRatherThanFail() throws {
+        let json = #"[{"id": "uploaded-1"}]"#
+        let entries = try decoder().decode([CoverLetterEntry].self, from: Data(json.utf8))
+        #expect(entries[0].storedIn == "app")
+        #expect(!entries[0].isInApp)  // no file link, so nothing to open here
+    }
+
+    @Test func storageSettingsAreLenient() throws {
+        let settings = try decoder().decode(DocumentSettings.self, from: Data(#"{"storage": "someday"}"#.utf8))
+        #expect(settings.storage == .both)
+        #expect(!settings.driveAvailable)
+    }
+}

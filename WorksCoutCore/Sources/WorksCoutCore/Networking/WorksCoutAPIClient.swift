@@ -253,6 +253,53 @@ public actor WorksCoutAPIClient {
         try await request("api/identity/ai-credentials/\(id)/", method: "DELETE")
     }
 
+    // MARK: Documents and the cover-letter library
+
+    public func fetchDocumentSettings() async throws -> DocumentSettings {
+        try await request("api/identity/document-settings/")
+    }
+
+    /// Where documents saved from now on are kept. Nothing already saved moves.
+    public func updateDocumentStorage(_ storage: DocumentStorage) async throws -> DocumentSettings {
+        try await request("api/identity/document-settings/", method: "PATCH",
+                          body: ["storage": storage.rawValue])
+    }
+
+    /// Every cover letter on the account, written here or uploaded.
+    public func fetchCoverLetters(sort: CoverLetterSort = .newest,
+                                  source: CoverLetterSource = .all) async throws -> [CoverLetterEntry] {
+        try await request("api/identity/cover-letters/", queryItems: [
+            URLQueryItem(name: "sort", value: sort.rawValue),
+            URLQueryItem(name: "source", value: source.rawValue),
+        ])
+    }
+
+    /// A document's bytes through its token-authenticated download link.
+    /// Refuses any link that isn't on this API's own host, so the account's
+    /// token is never sent anywhere else.
+    public func downloadFile(from url: URL) async throws -> Data {
+        guard url.scheme == configuration.baseURL.scheme, url.host == configuration.baseURL.host else {
+            throw WorksCoutAPIError.transport
+        }
+        var urlRequest = URLRequest(url: url)
+        authorize(&urlRequest)
+        urlRequest.timeoutInterval = 60
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: urlRequest)
+        } catch {
+            throw WorksCoutAPIError.transport
+        }
+        guard let http = response as? HTTPURLResponse else { throw WorksCoutAPIError.transport }
+        switch http.statusCode {
+        case 200..<300: return data
+        case 401, 403: throw WorksCoutAPIError.notAuthenticated
+        case 404: throw WorksCoutAPIError.notFound
+        default: throw WorksCoutAPIError.badStatus(http.statusCode)
+        }
+    }
+
     // MARK: Google Drive
 
     /// A one-use, ten-minute link to Google's file picker for this account's

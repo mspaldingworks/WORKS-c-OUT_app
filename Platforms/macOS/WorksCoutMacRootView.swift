@@ -15,6 +15,7 @@ struct WorksCoutMacRootView: View {
         case drafts = "Drafts"
         case approvals = "Approvals"
         case applied = "Applied"
+        case library = "Cover Letters"
         case identity = "Identity"
 
         // Identify each case by the value itself, not its raw string. The
@@ -27,6 +28,7 @@ struct WorksCoutMacRootView: View {
             case .drafts: return "doc.text.magnifyingglass"
             case .approvals: return "checkmark.seal"
             case .applied: return "paperplane"
+            case .library: return "books.vertical"
             case .identity: return "person.text.rectangle"
             }
         }
@@ -95,6 +97,9 @@ struct WorksCoutMacRootView: View {
         case .applied:
             AppliedView(client: client, onUnauthorized: { isSigningIn = true })
                 .navigationTitle("Applied")
+        case .library:
+            CoverLetterLibraryView(client: client, onUnauthorized: { isSigningIn = true })
+                .navigationTitle("Cover Letters")
         case .identity:
             IdentityView(client: client, onUnauthorized: { isSigningIn = true },
                          onSignOut: { session.signOut() })
