@@ -348,6 +348,18 @@ public actor WorksCoutAPIClient {
         try await request("api/identity/skills/", method: "POST", body: new)
     }
 
+    /// Add several skills at once — every suggestion from a résumé. Names the
+    /// account already has are skipped server-side. Returns the ones created.
+    public func createSkills(_ new: [NewSkill]) async throws -> [Skill] {
+        try await request("api/identity/skills/bulk/", method: "POST", body: ["skills": new])
+    }
+
+    /// Returns the removed skill (200, not 204), so Undo can re-add it as it was.
+    @discardableResult
+    public func deleteSkill(id: Int) async throws -> Skill {
+        try await request("api/identity/skills/\(id)/", method: "DELETE")
+    }
+
     /// Remove a résumé from the list. Not a delete — the row and its parsed
     /// suggestions survive so `restoreResume` can put them back.
     public func discardResume(id: Int) async throws -> ResumeVersion {

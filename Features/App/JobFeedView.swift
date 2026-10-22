@@ -27,6 +27,8 @@ struct JobFeedView: View {
     // appear in the bar; the salary brackets are checkboxes that collapse to a
     // single min/max range sent to the server.
     @State private var preferences = JobFilterPreferences()
+    // The account's own skills — the Job type filter's options.
+    @State private var skills: [Skill] = []
     @State private var filter = JobFilterQuery()
     @State private var selectedBrackets: Set<String> = []
     @State private var includeUnspecifiedSalary = true
@@ -145,6 +147,15 @@ struct JobFeedView: View {
 
     private func load() async {
         await loadPreferences()
+        if let mine = try? await client.fetchSkills() {
+            skills = mine
+            // A skill removed in Identity can't stay selected here.
+            let names = Set(mine.map(\.name))
+            if filter.skills.contains(where: { !names.contains($0) }) {
+                filter.skills.removeAll { !names.contains($0) }
+                return  // onChange(of: filter) does the load
+            }
+        }
         if !appliedSavedSort {
             appliedSavedSort = true
             // Closest needs a home; without one the server would quietly fall
@@ -311,6 +322,7 @@ struct JobFeedView: View {
             HStack(spacing: 8) {
                 sortMenu
                 if preferences.remote { workplaceMenu }
+                if preferences.remote || preferences.distance { remoteChip }
                 if preferences.distance { distanceMenu }
                 if preferences.postedDate { postedMenu }
                 if preferences.salary { salaryMenu }
@@ -371,6 +383,9 @@ struct JobFeedView: View {
             get: { filter.workplaces.contains(workplace) },
             set: { isOn in
                 if isOn {
+                    // Asking for remote work while remote jobs are switched off
+                    // would show nothing; asking is the stronger signal.
+                    if workplace == .remote { filter.includeRemote = true }
                     if !filter.workplaces.contains(workplace) { filter.workplaces.append(workplace) }
                     // Keep the order stable whatever order they were ticked in.
                     filter.workplaces.sort { lhs, rhs in
@@ -414,7 +429,7 @@ struct JobFeedView: View {
                     }
                 }
                 Divider()
-                Toggle("Include remote jobs", isOn: $filter.includeRemoteInRadius)
+                Toggle("Show remote jobs at any distance", isOn: remoteBinding)
             } else {
                 Text("Set a home location in Identity → Job filters to filter by distance.")
             }
@@ -469,16 +484,51 @@ struct JobFeedView: View {
         )
     }
 
+    /// The account's own skills, from its résumé, then the schedule types.
+    /// Several skills widen the feed (any of them matches); a schedule narrows it.
     private var jobTypeMenu: some View {
         Menu {
-            ForEach(Self.jobTypeOptions) { option in
-                Toggle(option.label, isOn: jobTypeBinding(option.token))
+            Section("Your skills") {
+                if skills.isEmpty {
+                    Text("Upload a résumé in Identity and add its skills to filter by them.")
+                } else {
+                    ForEach(skills) { skill in
+                        Toggle(skill.name, isOn: skillBinding(skill.name))
+                    }
+                }
+            }
+            Section("Schedule") {
+                ForEach(Self.jobTypeOptions) { option in
+                    Toggle(option.label, isOn: jobTypeBinding(option.token))
+                }
             }
         } label: {
-            chipLabel(filter.jobTypes.isEmpty ? "Job type" : "Job type (\(filter.jobTypes.count))",
-                      systemImage: "briefcase", active: !filter.jobTypes.isEmpty)
+            chipLabel(jobTypeTitle, systemImage: "briefcase", active: jobTypeCount > 0)
         }
-        .accessibilityLabel("Filter by job type")
+        .accessibilityLabel("Filter by job type: \(jobTypeTitle)")
+    }
+
+    private var jobTypeCount: Int { filter.skills.count + filter.jobTypes.count }
+
+    private var jobTypeTitle: String {
+        switch jobTypeCount {
+        case 0: return "Job type"
+        case 1: return filter.skills.first ?? Self.jobTypeOptions.first { $0.token == filter.jobTypes[0] }?.label ?? "Job type (1)"
+        default: return "Job type (\(jobTypeCount))"
+        }
+    }
+
+    private func skillBinding(_ name: String) -> Binding<Bool> {
+        Binding(
+            get: { filter.skills.contains(name) },
+            set: { isOn in
+                if isOn {
+                    if !filter.skills.contains(name) { filter.skills.append(name) }
+                } else {
+                    filter.skills.removeAll { $0 == name }
+                }
+            }
+        )
     }
 
     private func jobTypeBinding(_ token: String) -> Binding<Bool> {
@@ -512,6 +562,32 @@ struct JobFeedView: View {
 
     /// Hides Workday, iCIMS and the other portals that won't show the form
     /// without an account — the applications she can't finish from her phone.
+    /// Remote jobs aren't anywhere in particular, so distance never hides
+    /// them; this is the one switch that does. On by default.
+    private var remoteChip: some View {
+        Button {
+            remoteBinding.wrappedValue.toggle()
+        } label: {
+            chipLabel(filter.includeRemote ? "Remote: shown" : "Remote: hidden",
+                      systemImage: filter.includeRemote ? "wifi" : "wifi.slash",
+                      active: !filter.includeRemote)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(filter.includeRemote
+            ? "Remote jobs are shown at any distance. Activate to hide them."
+            : "Remote jobs are hidden. Activate to show them.")
+    }
+
+    private var remoteBinding: Binding<Bool> {
+        Binding(
+            get: { filter.includeRemote },
+            set: { isOn in
+                filter.includeRemote = isOn
+                if !isOn { filter.workplaces.removeAll { $0 == .remote } }
+            }
+        )
+    }
+
     private var noAccountChip: some View {
         Button {
             filter.noAccountOnly.toggle()

@@ -188,12 +188,16 @@ public struct JobFilterQuery: Equatable, Sendable {
     /// Straight-line miles from the saved home. Needs a home on the server;
     /// without one the server ignores it.
     public var withinMiles: Int?
-    /// Keep remote jobs when a radius is set — they're within reach of anywhere.
-    public var includeRemoteInRadius: Bool
+    /// The feed's Remote toggle. On, remote jobs are always shown, however far
+    /// away the employer is — a radius never hides them. Off, they're hidden.
+    public var includeRemote: Bool
     /// Listed in the last N days.
     public var postedWithinDays: Int?
-    /// Normalized job-type tokens, e.g. "full_time", "contract".
+    /// Normalized schedule tokens, e.g. "full_time", "contract".
     public var jobTypes: [String]
+    /// The account's own skills (from its résumé); a posting that asks for
+    /// any of them matches. Shown as the Job type filter.
+    public var skills: [String]
     /// Minimum fit score, 0–100.
     public var minScore: Int?
     /// Hide postings whose portal wants an account before showing the form.
@@ -206,17 +210,18 @@ public struct JobFilterQuery: Equatable, Sendable {
     public init(salaryMin: Int? = nil, salaryMax: Int? = nil,
                 includeUnspecifiedSalary: Bool = true,
                 workplaces: [Workplace] = [], withinMiles: Int? = nil,
-                includeRemoteInRadius: Bool = true, postedWithinDays: Int? = nil,
-                jobTypes: [String] = [], minScore: Int? = nil,
+                includeRemote: Bool = true, postedWithinDays: Int? = nil,
+                jobTypes: [String] = [], skills: [String] = [], minScore: Int? = nil,
                 noAccountOnly: Bool = false, search: String = "", sort: JobSort = .best) {
         self.salaryMin = salaryMin
         self.salaryMax = salaryMax
         self.includeUnspecifiedSalary = includeUnspecifiedSalary
         self.workplaces = workplaces
         self.withinMiles = withinMiles
-        self.includeRemoteInRadius = includeRemoteInRadius
+        self.includeRemote = includeRemote
         self.postedWithinDays = postedWithinDays
         self.jobTypes = jobTypes
+        self.skills = skills
         self.minScore = minScore
         self.noAccountOnly = noAccountOnly
         self.search = search
@@ -230,8 +235,8 @@ public struct JobFilterQuery: Equatable, Sendable {
     /// True when nothing here actually constrains the feed. Sort doesn't count.
     public var isEmpty: Bool {
         salaryMin == nil && salaryMax == nil && workplaces.isEmpty && withinMiles == nil
-            && postedWithinDays == nil && jobTypes.isEmpty && minScore == nil
-            && !noAccountOnly && trimmedSearch.isEmpty
+            && postedWithinDays == nil && jobTypes.isEmpty && skills.isEmpty && minScore == nil
+            && !noAccountOnly && trimmedSearch.isEmpty && includeRemote
     }
 
     /// The same query with every filter cleared but the sort kept.
@@ -249,16 +254,20 @@ public struct JobFilterQuery: Equatable, Sendable {
             items.append(URLQueryItem(name: "workplace", value: workplace.rawValue))
         }
         if let withinMiles {
+            // Remote jobs are kept inside any radius by default on the server.
             items.append(URLQueryItem(name: "within_miles", value: String(withinMiles)))
-            if !includeRemoteInRadius {
-                items.append(URLQueryItem(name: "include_remote", value: "0"))
-            }
+        }
+        if !includeRemote {
+            items.append(URLQueryItem(name: "exclude_remote", value: "1"))
         }
         if let postedWithinDays {
             items.append(URLQueryItem(name: "posted_within", value: String(postedWithinDays)))
         }
         for type in jobTypes {
             items.append(URLQueryItem(name: "job_type", value: type))
+        }
+        for skill in skills {
+            items.append(URLQueryItem(name: "skill", value: skill))
         }
         if let minScore { items.append(URLQueryItem(name: "min_score", value: String(minScore))) }
         if noAccountOnly { items.append(URLQueryItem(name: "no_account", value: "1")) }

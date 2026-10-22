@@ -1,5 +1,4 @@
 import WorksCoutCore
-import CoreLocation
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -19,14 +18,17 @@ struct IdentityView: View {
     @State private var pickedFile: PickedFile?
     @State private var parsingResumeID: Int?
     @State private var addingSkillKey: String?
+    @State private var addingAllFromResumeID: Int?
     @State private var removed: RemovedItem?
+    // Set when the Undo banner is for a skill rather than a résumé: undoing
+    // re-adds it exactly as it was.
+    @State private var removedSkill: Skill?
     @State private var isUndoing = false
     // Which Job-Feed filters this account wants surfaced. Edited here so the
     // feed's filter bar stays legible; saved straight to the server on toggle.
     @State private var filterPreferences = JobFilterPreferences()
-    // The home-location field: what she's typed, and whether it's being looked up.
-    @State private var homeQuery = ""
-    @State private var isLocatingHome = false
+    // The home-location search sheet.
+    @State private var editingHome = false
     // The user's own AI provider keys (masked). Adding one routes their
     // generation/parsing through their subscription instead of the server's.
     @State private var aiCredentials: [AICredential] = []
@@ -51,6 +53,10 @@ struct IdentityView: View {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List {
+                    // Résumés lead: everything else in the app — skills, match
+                    // scores, the Job type filter, drafts — starts from one.
+                    resumesSection
+                    skillsSection
                     filterSection
                     aiProviderSection
                     driveSection
@@ -70,38 +76,6 @@ struct IdentityView: View {
                                 }
                             }
                         }
-                    }
-                    if !skills.isEmpty {
-                        Section("Skills") {
-                            ForEach(skills) { skill in
-                                HStack {
-                                    Text(skill.name)
-                                    Spacer()
-                                    Text(skill.proficiency.rawValue.capitalized)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                    }
-                    Section {
-                        if resumes.isEmpty {
-                            Text("No résumés uploaded yet. Add one to get AI-suggested skills.")
-                                .foregroundStyle(.secondary)
-                                .font(.footnote)
-                        }
-                        ForEach(resumes) { resume in
-                            ResumeRow(
-                                resume: resume,
-                                isParsing: parsingResumeID == resume.id,
-                                addingSkillKey: addingSkillKey,
-                                onParse: { Task { await parse(resume) } },
-                                onRemove: { Task { await remove(resume) } },
-                                onAddSkill: { suggestion in Task { await addSkill(suggestion, from: resume) } }
-                            )
-                        }
-                    } header: {
-                        Text("Résumés")
                     }
                     accountSection
                 }
@@ -147,8 +121,102 @@ struct IdentityView: View {
             }
         }
         .sheet(item: $pickedFile) { file in
-            ResumeUploadView(client: client, fileURL: file.url) {
-                Task { await load() }
+            ResumeUploadView(client: client, fileURL: file.url) { uploaded in
+                // Uploading is for processing: read it straight away rather
+                // than leaving a second button to find.
+                Task {
+                    await load()
+                    if let resume = resumes.first(where: { $0.id == uploaded.id }) {
+                        await parse(resume)
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $editingHome) {
+            HomeLocationSheet(initialQuery: filterPreferences.homeLabel) { choice in
+                Task { await setHome(choice) }
+            }
+        }
+    }
+
+    // MARK: Résumés and skills
+
+    private var resumesSection: some View {
+        Section {
+            if resumes.isEmpty {
+                Text("Upload your résumé to get started. Claude reads it and suggests your skills. The skills you add rank your Job Feed and become its Job type filters.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(resumes) { resume in
+                ResumeRow(
+                    resume: resume,
+                    isParsing: parsingResumeID == resume.id,
+                    addingSkillKey: addingSkillKey,
+                    isAddingAll: addingAllFromResumeID == resume.id,
+                    onParse: { Task { await parse(resume) } },
+                    onRemove: { Task { await remove(resume) } },
+                    onAddSkill: { suggestion in Task { await addSkill(suggestion, from: resume) } },
+                    onAddAll: { Task { await addAllSkills(from: resume) } }
+                )
+            }
+            uploadButton
+        } header: {
+            Text("Résumés")
+        } footer: {
+            if account?.usesServerAIKey == false && aiCredentials.isEmpty {
+                Text("PDF or Word (.docx). Reading a résumé needs an AI key — add yours under AI provider below first.")
+            } else {
+                Text("PDF or Word (.docx). Your first résumé also becomes the career history your drafts are written from.")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var uploadButton: some View {
+        let label = Label(resumes.isEmpty ? "Upload résumé" : "Upload another résumé",
+                          systemImage: "doc.badge.plus")
+            .frame(maxWidth: .infinity, minHeight: 36)
+        if resumes.isEmpty {
+            Button { pickingFile = true } label: { label }
+                .buttonStyle(.borderedProminent)
+                .accessibilityLabel("Upload a résumé")
+        } else {
+            Button { pickingFile = true } label: { label }
+                .buttonStyle(.bordered)
+                .accessibilityLabel("Upload another résumé")
+        }
+    }
+
+    private var skillsSection: some View {
+        Section {
+            if skills.isEmpty {
+                Text("No skills yet. Add them from a résumé above.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(skills) { skill in
+                HStack {
+                    Text(skill.name)
+                    Spacer()
+                    Text(skill.proficiency.rawValue.capitalized)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button(role: .destructive) {
+                        Task { await removeSkill(skill) }
+                    } label: {
+                        Image(systemName: "xmark.circle")
+                    }
+                    .buttonStyle(.borderless)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .accessibilityLabel("Remove \(skill.name) from your skills")
+                }
+            }
+        } header: {
+            Text("Skills")
+        } footer: {
+            if !skills.isEmpty {
+                Text("Each skill is a Job type filter in the Job Feed, and jobs that ask for more of them rank higher. Changes re-rank the feed the next time it loads.")
             }
         }
     }
@@ -212,6 +280,7 @@ struct IdentityView: View {
         do {
             _ = try await client.discardResume(id: resume.id)
             resumes.removeAll { $0.id == resume.id }
+            removedSkill = nil
             removed = RemovedItem(id: resume.id, label: resume.title)
             errorMessage = nil
         } catch WorksCoutAPIError.notAuthenticated {
@@ -225,7 +294,14 @@ struct IdentityView: View {
         isUndoing = true
         defer { isUndoing = false }
         do {
-            _ = try await client.restoreResume(id: item.id)
+            if let skill = removedSkill {
+                _ = try await client.createSkill(
+                    NewSkill(name: skill.name, category: skill.category, proficiency: skill.proficiency)
+                )
+                removedSkill = nil
+            } else {
+                _ = try await client.restoreResume(id: item.id)
+            }
             removed = nil
             await load()
         } catch WorksCoutAPIError.notAuthenticated {
@@ -264,6 +340,54 @@ struct IdentityView: View {
         }
     }
 
+    /// Every suggestion from one résumé in a single request. Falls back to one
+    /// request per skill against a server that predates the bulk endpoint.
+    private func addAllSkills(from resume: ResumeVersion) async {
+        let suggestions = resume.parsedData.skills
+        guard !suggestions.isEmpty else { return }
+        addingAllFromResumeID = resume.id
+        defer { addingAllFromResumeID = nil }
+        let new = suggestions.map { NewSkill(name: $0.name, category: $0.category, proficiency: $0.proficiency) }
+        do {
+            do {
+                _ = try await client.createSkills(new)
+            } catch WorksCoutAPIError.notFound {
+                for skill in new {
+                    _ = try? await client.createSkill(skill)
+                }
+            }
+            if let index = resumes.firstIndex(where: { $0.id == resume.id }) {
+                resumes[index].parsedData.skills = []
+            }
+            skills = try await client.fetchSkills()
+            errorMessage = nil
+        } catch WorksCoutAPIError.notAuthenticated {
+            onUnauthorized()
+        } catch {
+            errorMessage = "Couldn't add the skills from \(resume.title): \(error)"
+        }
+    }
+
+    /// No confirmation — an Undo banner re-adds it, per §3.5.
+    private func removeSkill(_ skill: Skill) async {
+        do {
+            do {
+                try await client.deleteSkill(id: skill.id)
+            } catch WorksCoutAPIError.decodingFailed {
+                // An older server answers a delete with an empty 204. It still
+                // deleted the skill; there is just no body to read.
+            }
+            skills.removeAll { $0.id == skill.id }
+            removedSkill = skill
+            removed = RemovedItem(id: skill.id, label: skill.name)
+            errorMessage = nil
+        } catch WorksCoutAPIError.notAuthenticated {
+            onUnauthorized()
+        } catch {
+            errorMessage = "Couldn't remove \(skill.name): \(error)"
+        }
+    }
+
     // MARK: Account
 
     /// Last in the list, where sign-out sits in most apps: who is signed in,
@@ -298,7 +422,7 @@ struct IdentityView: View {
             Toggle("Distance from home", isOn: filterBinding(\.distance))
             Toggle("Date posted", isOn: filterBinding(\.postedDate))
             Toggle("Salary range", isOn: filterBinding(\.salary))
-            Toggle("Job type", isOn: filterBinding(\.jobType))
+            Toggle("Job type (your skills and schedule)", isOn: filterBinding(\.jobType))
             Toggle("Match score", isOn: filterBinding(\.matchScore))
             Toggle("No account needed", isOn: filterBinding(\.easyApply))
             homeLocationRow
@@ -310,7 +434,7 @@ struct IdentityView: View {
         } header: {
             Text("Job filters")
         } footer: {
-            Text("Choose which filters appear in the Job Feed. Fewer means a simpler filter bar. Distances are straight-line miles from your home location, which is looked up on this device and saved only as a point on the map.")
+            Text("Choose which filters appear in the Job Feed. Fewer means a simpler filter bar. Distances are straight-line miles from your home location; remote jobs are shown whatever the distance, and can be switched off in the feed.")
         }
     }
 
@@ -321,25 +445,24 @@ struct IdentityView: View {
                 Label(filterPreferences.homeLabel.isEmpty ? "Home location set" : filterPreferences.homeLabel,
                       systemImage: "house.fill")
                 Spacer()
-                Button("Change") {
-                    homeQuery = filterPreferences.homeLabel
-                    Task { await setHome(nil) }
-                }
-                .buttonStyle(.borderless)
+                Button("Change") { editingHome = true }
+                    .buttonStyle(.borderless)
+                    .frame(minHeight: 44)
+                    .accessibilityLabel("Change your home location")
+                Button("Clear", role: .destructive) { Task { await setHome(nil) } }
+                    .buttonStyle(.borderless)
+                    .frame(minHeight: 44)
+                    .accessibilityLabel("Clear your home location")
             }
-            .accessibilityElement(children: .combine)
         } else {
-            HStack {
-                TextField("Home city or ZIP code", text: $homeQuery)
-                    .onSubmit { Task { await lookUpHome() } }
-                if isLocatingHome {
-                    ProgressView()
-                } else {
-                    Button("Set") { Task { await lookUpHome() } }
-                        .buttonStyle(.borderless)
-                        .disabled(homeQuery.trimmingCharacters(in: .whitespaces).isEmpty)
-                }
+            Button {
+                editingHome = true
+            } label: {
+                Label("Set home location…", systemImage: "location")
+                    .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
             }
+            .buttonStyle(.bordered)
+            .accessibilityHint("Search for a city or ZIP code to measure job distances from")
         }
     }
 
@@ -354,49 +477,13 @@ struct IdentityView: View {
         )
     }
 
-    /// Turns what she typed into coordinates with the system geocoder, so the
-    /// server never has to send her address to a third party.
-    private func lookUpHome() async {
-        let query = homeQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return }
-        isLocatingHome = true
-        defer { isLocatingHome = false }
-        do {
-            let placemarks = try await CLGeocoder().geocodeAddressString(query)
-            guard let placemark = placemarks.first, let location = placemark.location else {
-                errorMessage = "Couldn't find \(query). Try a city and state, or a ZIP code."
-                return
-            }
-            await setHome(HomeLocation(label: Self.label(for: placemark, typed: query),
-                                       coordinate: location.coordinate))
-        } catch {
-            errorMessage = "Couldn't find \(query). Try a city and state, or a ZIP code."
-        }
-    }
-
-    private struct HomeLocation {
-        let label: String
-        let coordinate: CLLocationCoordinate2D
-    }
-
     /// Saves (or, with nil, clears) the home location.
-    private func setHome(_ home: HomeLocation?) async {
+    private func setHome(_ home: HomeLocationSheet.Choice?) async {
         let previous = filterPreferences
         filterPreferences.homeLabel = home?.label ?? ""
-        filterPreferences.homeLatitude = home?.coordinate.latitude
-        filterPreferences.homeLongitude = home?.coordinate.longitude
+        filterPreferences.homeLatitude = home?.latitude
+        filterPreferences.homeLongitude = home?.longitude
         await saveFilterPreferences(revertingTo: previous)
-        if home != nil { homeQuery = "" }
-    }
-
-    /// "Louisville, KY 40205" rather than whatever was typed, so she can see
-    /// the geocoder understood her.
-    private static func label(for placemark: CLPlacemark, typed: String) -> String {
-        let cityState = [placemark.locality, placemark.administrativeArea]
-            .compactMap { $0 }
-            .joined(separator: ", ")
-        let parts = [cityState, placemark.postalCode ?? ""].filter { !$0.isEmpty }
-        return parts.isEmpty ? typed : parts.joined(separator: " ")
     }
 
     /// Each toggle writes the whole preferences object back to the server. The
@@ -671,9 +758,11 @@ private struct ResumeRow: View {
     let resume: ResumeVersion
     let isParsing: Bool
     let addingSkillKey: String?
+    let isAddingAll: Bool
     let onParse: () -> Void
     let onRemove: () -> Void
     let onAddSkill: (ParsedSkillSuggestion) -> Void
+    let onAddAll: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -692,7 +781,11 @@ private struct ResumeRow: View {
                 }
             }
 
-            if resume.parsedData.hasContent {
+            if isParsing && !resume.parsedData.hasContent {
+                Label("Reading your résumé…", systemImage: "sparkles")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if resume.parsedData.hasContent {
                 suggestions
             }
         }
@@ -743,7 +836,21 @@ private struct ResumeRow: View {
                 .foregroundStyle(.secondary)
         } else {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Suggested skills").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                HStack {
+                    Text("Suggested skills").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    Spacer()
+                    Button(action: onAddAll) {
+                        if isAddingAll {
+                            ProgressView()
+                        } else {
+                            Label("Add all \(resume.parsedData.skills.count)", systemImage: "plus.circle.fill")
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .frame(minHeight: 44)
+                    .disabled(isAddingAll)
+                    .accessibilityLabel("Add all \(resume.parsedData.skills.count) suggested skills from \(resume.title)")
+                }
                 ForEach(resume.parsedData.skills) { suggestion in
                     suggestionRow(suggestion)
                 }

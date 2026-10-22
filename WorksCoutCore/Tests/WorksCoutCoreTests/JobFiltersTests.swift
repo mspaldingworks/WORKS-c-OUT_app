@@ -78,18 +78,32 @@ struct JobFilterQueryTests {
     }
 
     @Test func workplacesDistanceDateAndAccount() {
-        let query = JobFilterQuery(workplaces: [.remote, .hybrid], withinMiles: 25,
-                                   includeRemoteInRadius: false, postedWithinDays: 7,
-                                   noAccountOnly: true)
+        let query = JobFilterQuery(workplaces: [.hybrid], withinMiles: 25,
+                                   postedWithinDays: 7, noAccountOnly: true)
         #expect(!query.isEmpty)
         #expect(params(query) == [
-            "workplace=remote", "workplace=hybrid", "within_miles=25", "include_remote=0",
-            "posted_within=7", "no_account=1",
+            "workplace=hybrid", "within_miles=25", "posted_within=7", "no_account=1",
         ])
     }
 
-    @Test func includeRemoteIsOnlySentWithARadius() {
-        #expect(params(JobFilterQuery(includeRemoteInRadius: false)).isEmpty)
+    @Test func remoteJobsAreKeptByDefaultEvenWithARadius() {
+        // The server keeps remote jobs inside any radius; nothing extra to send.
+        #expect(params(JobFilterQuery(withinMiles: 10)) == ["within_miles=10"])
+        #expect(JobFilterQuery().isEmpty)
+    }
+
+    @Test func switchingRemoteOffHidesThemEverywhere() {
+        let query = JobFilterQuery(includeRemote: false)
+        #expect(!query.isEmpty)
+        #expect(params(query) == ["exclude_remote=1"])
+        #expect(params(JobFilterQuery(withinMiles: 25, includeRemote: false))
+                == ["within_miles=25", "exclude_remote=1"])
+    }
+
+    @Test func skillsAreSentOnePerParam() {
+        let query = JobFilterQuery(skills: ["Grant Writing", "Python"])
+        #expect(!query.isEmpty)
+        #expect(params(query) == ["skill=Grant Writing", "skill=Python"])
     }
 
     @Test func searchIsTrimmedAndBlankSearchIsNoFilter() {

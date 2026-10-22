@@ -6,10 +6,11 @@ options:
     macOS: "14.0"
 
 # Local.xcconfig supplies WORKS_COUT_API_TOKEN. Gitignored and machine-local, so
-# the token is baked into every build without anyone remembering a flag.
+# the token is baked into her own Debug installs without anyone remembering a
+# flag. Debug only: anything built for other people (Release, an App Store or
+# TestFlight archive) must open on the sign-in screen, never in her account.
 configFiles:
   Debug: Local.xcconfig
-  Release: Local.xcconfig
 
 packages:
   WorksCoutCore:

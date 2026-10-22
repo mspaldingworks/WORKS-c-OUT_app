@@ -10,14 +10,14 @@ import SwiftUI
 struct ResumeUploadView: View {
     let client: WorksCoutAPIClient
     let fileURL: URL
-    let onSaved: () -> Void
+    let onSaved: (ResumeVersion) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var title: String
     @State private var isSaving = false
     @State private var errorMessage: String?
 
-    init(client: WorksCoutAPIClient, fileURL: URL, onSaved: @escaping () -> Void) {
+    init(client: WorksCoutAPIClient, fileURL: URL, onSaved: @escaping (ResumeVersion) -> Void) {
         self.client = client
         self.fileURL = fileURL
         self.onSaved = onSaved
@@ -67,10 +67,10 @@ struct ResumeUploadView: View {
             let mimeType = isDocx
                 ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 : "application/pdf"
-            _ = try await client.uploadResume(
+            let uploaded = try await client.uploadResume(
                 title: title, fileData: data, filename: fileURL.lastPathComponent, mimeType: mimeType
             )
-            onSaved()
+            onSaved(uploaded)
             dismiss()
         } catch let error as WorksCoutAPIError {
             errorMessage = Self.message(for: error)
